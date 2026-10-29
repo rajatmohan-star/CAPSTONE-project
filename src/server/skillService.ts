@@ -292,14 +292,31 @@ export async function generateBlankExcelTemplate(): Promise<Buffer> {
     rIdx2++;
   });
 
-  // 3_Issues (Blank Template with column K formula)
+  // 3_Issues (Blank Template with 20 columns and column K formula)
   const ws3 = workbook.addWorksheet('3_Issues', { views: [{ showGridLines: true }] });
   ws3.columns = [
-    { width: 12 }, { width: 14 }, { width: 18 }, { width: 16 }, { width: 44 }, { width: 22 }, { width: 30 }, { width: 30 },
-    { width: 18 }, { width: 18 }, { width: 18 }, { width: 42 }, { width: 44 }, { width: 14 }, { width: 34 }, { width: 42 },
-    { width: 18 }, { width: 32 }
+    { width: 14 }, // 1. Issue ID
+    { width: 12 }, // 2. Entity ID
+    { width: 20 }, // 3. Law / domain tags
+    { width: 24 }, // 4. Period
+    { width: 48 }, // 5. Issue summary
+    { width: 24 }, // 6. Classification
+    { width: 32 }, // 7. Evidence A locator
+    { width: 32 }, // 8. Evidence B locator
+    { width: 18 }, // 9. Amount A (AED)
+    { width: 18 }, // 10. Amount B (AED)
+    { width: 18 }, // 11. A minus B (AED) [EXCEL FORMULA]
+    { width: 44 }, // 12. Reconciliation / test
+    { width: 50 }, // 13. Unresolved explanation / limit
+    { width: 14 }, // 14. Priority
+    { width: 28 }, // 15. Rules
+    { width: 48 }, // 16. Action
+    { width: 16 }, // 17. Request IDs
+    { width: 28 }, // 18. Suggested owner
+    { width: 20 }, // 19. Workflow status
+    { width: 24 }, // 20. Review approval
   ];
-  ws3.mergeCells('A2:R2');
+  ws3.mergeCells('A2:T2');
   const t3 = ws3.getCell('A2');
   t3.value = 'AMRG Global issues and reconciliations — Blank Template';
   t3.font = { name: 'Calibri', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -307,7 +324,29 @@ export async function generateBlankExcelTemplate(): Promise<Buffer> {
   ws3.getRow(2).height = 28;
 
   const hRow3 = ws3.getRow(6);
-  ['Issue ID', 'Entity ID', 'Law / domain tags', 'Period', 'Issue summary', 'Classification', 'Evidence A locator', 'Evidence B locator', 'Amount A (AED)', 'Amount B (AED)', 'A minus B (AED)', 'Reconciliation / test', 'Unresolved explanation / limit', 'Priority', 'Legal basis / Rule ID', 'Recommended action', 'Reviewer decision', 'Reviewer notes'].forEach((h, i) => {
+  const issHeaders = [
+    'Issue ID',
+    'Entity ID',
+    'Law / domain tags',
+    'Period',
+    'Issue summary',
+    'Classification',
+    'Evidence A locator',
+    'Evidence B locator',
+    'Amount A (AED)',
+    'Amount B (AED)',
+    'A minus B (AED)',
+    'Reconciliation / test',
+    'Unresolved explanation / limit',
+    'Priority',
+    'Rules',
+    'Action',
+    'Request IDs',
+    'Suggested owner',
+    'Workflow status',
+    'Review approval',
+  ];
+  issHeaders.forEach((h, i) => {
     const c = hRow3.getCell(i + 1);
     c.value = h;
     c.font = headerFont;
@@ -317,13 +356,13 @@ export async function generateBlankExcelTemplate(): Promise<Buffer> {
 
   // Add sample formula in row 7
   const blankRow3 = ws3.getRow(7);
-  blankRow3.getCell(1).value = 'I001';
+  blankRow3.getCell(1).value = 'ISSUE-0001';
   blankRow3.getCell(2).value = 'ENT-001';
-  blankRow3.getCell(3).value = 'VAT / CT';
+  blankRow3.getCell(3).value = 'VAT';
   blankRow3.getCell(4).value = 'FY2025';
   blankRow3.getCell(5).value = 'Sales differ between ledger and returns (Template formula demo)';
-  blankRow3.getCell(6).value = 'Discrepancy';
-  blankRow3.getCell(7).value = 'Sales!F2:F100';
+  blankRow3.getCell(6).value = 'Document discrepancy';
+  blankRow3.getCell(7).value = 'Sales Ledger F2:F100';
   blankRow3.getCell(8).value = 'VAT 201 Box 1';
   blankRow3.getCell(9).value = 1000000;
   blankRow3.getCell(9).numFmt = '#,##0.00';
@@ -334,35 +373,15 @@ export async function generateBlankExcelTemplate(): Promise<Buffer> {
   blankRow3.getCell(12).value = 'Compare same entity, period, currency and net-of-VAT basis';
   blankRow3.getCell(13).value = 'Timing and out-of-scope adjustments pending';
   blankRow3.getCell(14).value = 'High';
-  blankRow3.getCell(15).value = 'Federal Decree-Law No. 8 of 2017';
+  blankRow3.getCell(15).value = 'R04; Federal Decree-Law No. 8 of 2017';
   blankRow3.getCell(16).value = 'Reconcile ledger with quarterly VAT filings';
-  blankRow3.getCell(17).value = 'Accepted';
-  blankRow3.getCell(18).value = 'Standard reconciliation check';
-  for (let ci = 1; ci <= 18; ci++) {
+  blankRow3.getCell(17).value = 'REQ01';
+  blankRow3.getCell(18).value = 'VAT manager / finance (suggested)';
+  blankRow3.getCell(19).value = 'Awaiting evidence';
+  blankRow3.getCell(20).value = 'Draft - not human reviewed';
+  for (let ci = 1; ci <= 20; ci++) {
     blankRow3.getCell(ci).border = thinBorder;
   }
-
-  // Domain sheets
-  const domainSheets = ['CT', 'VAT', 'Free Zone', 'Banking', 'Secretarial Services', 'Labour Laws', 'Accounting & Audit', 'Other Laws', 'Coverage & Reconciliations'];
-  domainSheets.forEach(name => {
-    const ws = workbook.addWorksheet(name, { views: [{ showGridLines: true }] });
-    ws.columns = [{ width: 14 }, { width: 18 }, { width: 44 }, { width: 22 }, { width: 34 }, { width: 42 }];
-    ws.mergeCells('A2:F2');
-    const t = ws.getCell('A2');
-    t.value = `AMRG Global — ${name} (Blank Template)`;
-    t.font = { name: 'Calibri', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
-    t.fill = headerFill(COLOR_NAVY);
-    ws.getRow(2).height = 26;
-
-    const hr = ws.getRow(5);
-    ['Issue ID', 'Period', 'Issue Summary', 'Classification', 'Evidence Locator', 'Recommended Action'].forEach((h, i) => {
-      const c = hr.getCell(i + 1);
-      c.value = h;
-      c.font = headerFont;
-      c.fill = headerFill(COLOR_AMRG_GREEN);
-      c.border = thinBorder;
-    });
-  });
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);

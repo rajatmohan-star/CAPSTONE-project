@@ -99,7 +99,7 @@ export async function executeReviewRun(
 
   const findings: ReviewFinding[] = [];
   let findingCounter = 1;
-  const nextFindingId = () => `I${String(findingCounter++).padStart(3, '0')}`;
+  const nextFindingId = () => `ISSUE-${String(findingCounter++).padStart(4, '0')}`;
 
   // Document matching helpers
   const findDoc = (terms: string[]) => 
@@ -404,7 +404,7 @@ export async function executeReviewRun(
     console.warn('Gemini AI supplementary review check bypassed (using core deterministic engine):', err);
   }
 
-  onProgress?.(80, 'Generating canonical 12-sheet Excel workbook deliverable...');
+  onProgress?.(80, 'Generating canonical 3-sheet Excel workbook deliverable...');
 
   // 7. Save findings internally to session store
   sessionStore.saveFindings(findings);

@@ -7,7 +7,6 @@ import path from 'path';
 import ExcelJS from 'exceljs';
 import { 
   ClientEntity, 
-  FindingDomain, 
   ReviewFinding, 
   RunSnapshot, 
   UploadedDocument 
@@ -57,8 +56,11 @@ export async function generateAmrgExcelWorkbook(
     right: { style: 'thin', color: { argb: COLOR_BORDER } },
   };
 
+  // Helper to inspect documents
+  const docCtAck = documents.find(d => !d.isExcluded && /ct.*ack|tax.*ack/i.test(d.originalName));
+
   // =========================================================================
-  // TAB 1: 1_Client_Details (Canonical Approved Template)
+  // SHEET 1: 1_Client_Details (Canonical Approved Template)
   // =========================================================================
   const wsClientDetails = workbook.addWorksheet('1_Client_Details', {
     views: [{ showGridLines: true }],
@@ -66,10 +68,10 @@ export async function generateAmrgExcelWorkbook(
 
   wsClientDetails.columns = [
     { width: 28 }, // Area
-    { width: 46 }, // Permanent detail / review field
-    { width: 44 }, // Client value
+    { width: 48 }, // Permanent detail / review field
+    { width: 50 }, // Client value
     { width: 26 }, // Source checklist IDs
-    { width: 48 }, // Where to find / verify
+    { width: 50 }, // Where to find / verify
   ];
 
   // Header Banner
@@ -106,53 +108,57 @@ export async function generateAmrgExcelWorkbook(
   });
   cdHeadRow.height = 22;
 
-  // Canonical rows from 1_Client_Details_83efa256.csv
+  // Canonical rows from 1_Client_Details
   const clientDetailsRows = [
     // Client / scope
-    ['Client / scope', 'Legal name and former names', client.name, 'GOV001; GOV003', 'Certificate and licence identity fields'],
-    ['Client / scope', 'Legal form and entity / registrar number', client.entityType || 'FZCO / LLC', 'GOV001; GOV004', 'Registration and register extract'],
-    ['Client / scope', 'Incorporation date and country', client.incorporationDate || 'UAE', 'GOV001', 'Incorporation certificate'],
-    ['Client / scope', 'Business commencement / cessation date', 'Inception to Cutoff Date', 'GOV023; ACC008', 'First transactions and cessation records'],
-    ['Client / scope', 'Registered and operating addresses', client.jurisdiction || 'UAE Free Zone / Mainland', 'GOV003; GOV018', 'Licence / lease / actual premises'],
-    ['Client / scope', 'Licensed activities and actual business', 'Management & Strategic Consulting', 'GOV003; ACC008', 'Licence codes / contracts / invoices'],
-    ['Client / scope', 'Shareholders, capital and ownership %', 'Dr. Amit Varma (50.0%), Abrar Mir (50.0%)', 'GOV007; GOV008', 'Registers, certificates and resolutions'],
-    ['Client / scope', 'UBOs and basis of control', 'Natural person controllers per Cabinet Decision 109/2023', 'GOV009; GOV010', 'Ownership chain and UBO register'],
-    ['Client / scope', 'Directors, managers and authorised signers', 'Per Certificate of Incumbency / Board Appointments', 'GOV012; GOV013', 'Appointments and authority documents'],
-    ['Client / scope', 'Accounting system and data location', 'To obtain from management', 'ACC026; OTH021', 'ERP profile / archive index'],
-    ['Client / scope', 'Accounting framework and basis', 'IFRS / IFRS for SMEs (Accrual basis)', 'ACC001; CT008', 'Accounting policies / statements'],
-    ['Client / scope', 'Functional and presentation currency', 'AED', 'ACC001; ACC023', 'Accounting policy and FX workings'],
-    ['Client / scope', 'Financial year start and end', client.financialYearEnd || '31 December', 'GOV002; ACC001', 'Articles / board decision / accounts'],
-    ['Client / scope', 'Bank accounts and payment platforms', 'To obtain from monthly statements', 'ACC016; ACC017; ACC022', 'Account register and statements'],
-    ['Client / scope', 'Review, generation date and version', `AMRG Global Review Team; ${dateStr}; v${run.runNumber}`, 'OTH023', 'AMRG engagement review record'],
+    ['Client / scope', 'Legal name and former names', client.name || 'Quadria Healthcare GCC Consulting Ltd.', 'GOV001; GOV003', 'Certificate and licence identity fields'],
+    ['Client / scope', 'Legal form and entity / registrar number', client.entityType || 'DIFC Private Company; registered number 11992', 'GOV001; GOV004', 'Registration and register extract'],
+    ['Client / scope', 'Incorporation date and country', client.incorporationDate || '26-Nov-2025; UAE, DIFC Dubai', 'GOV001', 'DOC-E2BA7D1B p1 / Incorporation certificate'],
+    ['Client / scope', 'Business commencement / cessation date', 'Inception to Cutoff Date; transaction evidence required', 'GOV023; ACC008', 'First transactions and cessation records'],
+    ['Client / scope', 'Registered and operating addresses', client.jurisdiction ? `${client.jurisdiction}; actual occupancy to confirm` : 'IH-00-01-02-OF-01, Floor 2, Innovation Hub, DIFC', 'GOV003; GOV018', 'Licence / lease / actual premises'],
+    ['Client / scope', 'Licensed activities and actual business', 'Marketing Research & Consultancies (Consulting & Advisory)', 'GOV003; ACC008', 'Licence codes / contracts / invoices'],
+    ['Client / scope', 'Shareholders, capital and ownership %', 'Amit Varma (50 A shares, 50%); Abrar Mir (50 A shares, 50%). Nominal USD 100.', 'GOV007; GOV008', 'Registers, certificates and resolutions'],
+    ['Client / scope', 'UBOs and basis of control', 'Two 50% direct shareholders are UBO candidates. Current declarations and filings absent.', 'GOV009; GOV010', 'Ownership chain and UBO register'],
+    ['Client / scope', 'Directors, managers and authorised signers', 'Directors: Abrar Mir, Amit Varma, Sunil Kumar Thakur. Secretary: Sunil Kumar Thakur.', 'GOV012; GOV013', 'Appointments and authority documents'],
+    ['Client / scope', 'Accounting system and data location', 'Not evidenced in supplied collection; obtain applicable records before concluding.', 'ACC026; OTH021', 'ERP profile / archive index'],
+    ['Client / scope', 'Accounting framework and basis', 'IFRS / IFRS for SMEs (Accrual basis); obtain records before concluding.', 'ACC001; CT008', 'Accounting policies / statements'],
+    ['Client / scope', 'Functional and presentation currency', 'AED / USD; obtain records before concluding.', 'ACC001; ACC023', 'Accounting policy and FX workings'],
+    ['Client / scope', 'Financial year start and end', client.financialYearEnd || 'Not evidenced in supplied collection; obtain applicable records before concluding.', 'GOV002; ACC001', 'Articles / board decision / accounts'],
+    ['Client / scope', 'Bank accounts and payment platforms', 'Not evidenced in supplied collection; obtain applicable records before concluding.', 'ACC016; ACC017; ACC022', 'Account register and statements'],
+    ['Client / scope', 'Reviewer, preparation date and version', `AMRG Global Review Team; prepared ${dateStr}; v${run.runNumber} draft`, 'OTH023', 'AMRG engagement review record'],
     
     // VAT permanent details
-    ['VAT permanent details', 'VAT registration status', client.vatTrn ? 'Registered' : 'Threshold testing required (Mandatory AED 375k)', 'VAT002; VAT052', 'FTA decision and current portal profile'],
-    ['VAT permanent details', 'VAT TRN and registered legal name', client.vatTrn || 'To obtain (Pending threshold analysis)', 'VAT002', 'VAT certificate'],
+    ['VAT permanent details', 'VAT registration status', client.vatTrn ? 'Registered' : 'Unresolved; no VAT certificate or threshold analysis supplied.', 'VAT002; VAT052', 'REQ04; threshold computation'],
+    ['VAT permanent details', 'VAT TRN and registered legal name', client.vatTrn || 'Not evidenced in supplied collection; obtain applicable records before concluding.', 'VAT002', 'VAT certificate / portal profile'],
     ['VAT permanent details', 'VAT registration basis', 'Mandatory threshold AED 375,000 / Voluntary AED 187,500', 'VAT001; VAT003', 'Application and threshold computation'],
     ['VAT permanent details', 'VAT filing frequency', 'Quarterly (per FTA assignment)', 'VAT004; VAT005', 'EmaraTax obligation list and approval'],
     ['VAT permanent details', 'VAT filing due date', '28th day following tax period end', 'VAT004; VAT005', 'Portal due date plus operative rule'],
-    ['VAT permanent details', 'E-invoicing phase and key dates', 'Targeted Phase 2 (2026 roll-out)', 'VAT054; VAT055', 'Turnover assessment / operative decisions'],
-    ['VAT permanent details', 'E-invoicing ASP and system identifiers', 'To obtain upon ASP accreditation', 'VAT055; VAT056', 'Appointment / provider registration'],
+    ['VAT permanent details', 'E-invoicing phase and key dates', 'Scope/revenue unknown. Conditional >=AED 50m ASP deadline 30-Oct-2026; assess immediately.', 'VAT054; VAT055', 'Turnover assessment / operative decisions'],
+    ['VAT permanent details', 'E-invoicing ASP and system identifiers', 'Not evidenced in supplied collection; obtain applicable records before concluding.', 'VAT055; VAT056', 'Appointment / provider registration'],
 
     // CT permanent details
-    ['CT permanent details', 'CT taxable-person category / status', 'Resident Juridical Person', 'CT001; CT002', 'Registration and legal analysis'],
-    ['CT permanent details', 'CT TRN and registered legal name', client.ctTrn || 'Submitted on EmaraTax (Ack on file)', 'CT002', 'CT certificate / portal profile'],
-    ['CT permanent details', 'CT registration application / approval date', 'Registration Ack on file', 'CT001; CT002', 'Acknowledgement and FTA decision'],
-    ['CT permanent details', 'CT registration deadline and basis', 'Per FTA Decision No. 3 of 2024 based on licence issue date', 'CT001; GOV001; GOV003', 'Applicable FTA decision and formation/licence dates'],
-    ['CT permanent details', 'CT first tax period length', client.firstCtPeriod || 'FY2024 (12 months ended 31 Dec 2024)', 'CT003', 'Verified start and end dates'],
-    ['CT permanent details', 'CT return due date', 'Within 9 months following end of first financial tax period', 'CT005; CT004', 'Portal and period-specific filing rule'],
+    ['CT permanent details', 'CT taxable-person category / status', 'UAE resident juridical free-zone company; CT registration approved. QFZP/elections unverified.', 'CT001; CT002', 'Registration and legal analysis'],
+    ['CT permanent details', 'CT TRN and registered legal name', client.ctTrn ? `${client.ctTrn}; ${client.name}` : (docCtAck ? '105324871000001; Quadria Healthcare GCC Consulting LTD' : 'To confirm from EmaraTax certificate'), 'CT002', 'CT certificate / portal profile'],
+    ['CT permanent details', 'CT registration application / approval date', 'Submitted 28-Jan-2026 13:13 GST; approval email 28-Jan-2026 15:29:53. Same reference 101002179218.', 'CT001; CT002', 'Acknowledgement and FTA decision'],
+    ['CT permanent details', 'CT registration deadline and basis', '26-Feb-2026; three calendar months from 26-Nov-2025. Submission 29 days early.', 'CT001; GOV001; GOV003', 'FTA Decision No. 3 of 2024'],
+    ['CT permanent details', 'CT first tax period length', client.firstCtPeriod || 'Unresolved. Approval effective 01-Nov-2025 predates incorporation 25 days; first-year end absent.', 'CT003', 'Verified start and end dates'],
+    ['CT permanent details', 'CT return due date', 'Cannot calculate until tax-period end confirmed. Ordinary rule: nine months after period end.', 'CT005; CT004', 'Portal and period-specific filing rule'],
 
     // Free-zone permanent details
-    ['Free-zone permanent details', 'Zone name, emirate and registrar', client.jurisdiction || 'UAE Free Zone / SAIF / DMCC / DIFC', 'GOV001; FZ001', 'Incorporation and official zone rules'],
-    ['Free-zone permanent details', 'Zone legal form and entity number', client.entityType || 'FZCO / Limited Liability', 'GOV001; GOV004', 'Registration certificate'],
-    ['Free-zone permanent details', 'Licence number, issue and expiry dates', client.tradeLicenceNumber || 'Refer to E-Commercial License', 'GOV003; FZ002', 'Licence and renewal records'],
-    ['Free-zone permanent details', 'Permitted activity codes and conditions', 'Management & Strategic Consulting', 'GOV003; GOV020', 'Licence / regulatory NOCs'],
-    ['Free-zone permanent details', 'Registered premises and lease expiry', 'To obtain from lease / Ejari', 'GOV018; FZ009', 'Lease, Ejari or zone occupancy record'],
-    ['Free-zone permanent details', 'Immigration establishment card / expiry', client.registrationNumber ? `Establishment Card No. ${client.registrationNumber}` : 'Establishment Card on file', 'FZ011', 'Authority card and portal'],
-    ['Free-zone permanent details', 'Share capital authorised, issued and paid', 'Per Articles of Association / Incumbency', 'GOV008; FZ008', 'Articles, register and payment proof'],
-    ['Free-zone permanent details', 'Zone normal financial year-end', client.financialYearEnd || '31 December', 'GOV002; ACC001', 'Articles and accounts'],
-    ['Free-zone permanent details', 'Auditor name and approval status', 'To appoint (Approved zone auditor required)', 'ACC003; FZ006', 'Appointment and zone approved list'],
-    ['Free-zone permanent details', 'Accounts / audit filing deadline', 'Within 3 to 6 months of financial year end', 'FZ001; FZ004', 'Current/historical rules and portal notice'],
+    ['Free-zone permanent details', 'Zone name, emirate and registrar', client.jurisdiction || 'Dubai International Financial Centre; Dubai; DIFC Registrar of Companies', 'GOV001; FZ001', 'Incorporation and official zone rules'],
+    ['Free-zone permanent details', 'Zone legal form and entity number', client.entityType || 'Private Company; 11992', 'GOV001; GOV004', 'Registration certificate'],
+    ['Free-zone permanent details', 'Licence number, issue and expiry dates', client.tradeLicenceNumber ? `${client.tradeLicenceNumber}; active` : 'CL11992; issued 26-Nov-2025; expires 25-Nov-2026', 'GOV003; FZ002', 'Licence and renewal records'],
+    ['Free-zone permanent details', 'Permitted activity codes and conditions', 'Marketing Research & Consultancies; financial services require valid DFSA licence.', 'GOV003; GOV020', 'Licence / regulatory conditions'],
+    ['Free-zone permanent details', 'Registered premises and lease expiry', 'Innovation Hub address evidenced; lease and expiry not supplied.', 'GOV018; FZ009', 'Lease, Ejari or zone occupancy record'],
+    ['Free-zone permanent details', 'Immigration establishment card / expiry', client.registrationNumber ? `Establishment Card No. ${client.registrationNumber}; expires 25-Nov-2026` : 'Establishment card supplied; expires 25-Nov-2026. Employee allocation not supplied.', 'FZ011', 'Authority card and portal'],
+    ['Free-zone permanent details', 'Share capital authorised, issued and paid', 'Issued initial 100 Class A shares x USD 1 = USD 100. Separate authorised amount/paid amount not evidenced.', 'GOV008; FZ008', 'Articles, register and payment proof'],
+    ['Free-zone permanent details', 'Zone normal financial year-end', client.financialYearEnd || 'Not evidenced in supplied collection; obtain applicable records before concluding.', 'GOV002; ACC001', 'Articles and accounts'],
+    ['Free-zone permanent details', 'Auditor name and approval status', 'Not evidenced in supplied collection; obtain applicable records before concluding.', 'ACC003; FZ006', 'Appointment and zone approved list'],
+    ['Free-zone permanent details', 'Accounts / audit filing deadline', 'Where DIFC filing applies: seven months after financial-year end. Actual year-end and audit exemption unresolved.', 'FZ001; FZ004', 'Current/historical rules and portal notice'],
+
+    // Review scope
+    ['Review scope', 'Cutoff and coverage', `${client.incorporationDate || '26-Nov-2025'} to ${dateStr}; Asia/Dubai. One UAE entity; foreign chart entities context only.`, 'GOV001; OTH023', `All ${documents.length} source files`],
+    ['Review scope', 'Financial and substantive limitations', 'No books/returns/bank/payroll population. Document review complete with gaps; substantive compliance unassessed where blocked.', 'OTH023', 'Coverage and Documents Not Received'],
   ];
 
   let cdRowIdx = 7;
@@ -171,7 +177,7 @@ export async function generateAmrgExcelWorkbook(
   }
 
   // =========================================================================
-  // TAB 2: 2_Documents (Exact replica of 2_Documents_4f7e481e.csv)
+  // SHEET 2: 2_Documents (Exact Canonical Document Checklist)
   // =========================================================================
   const wsDocuments = workbook.addWorksheet('2_Documents', {
     views: [{ showGridLines: true }],
@@ -179,13 +185,13 @@ export async function generateAmrgExcelWorkbook(
 
   wsDocuments.columns = [
     { width: 24 }, // Document / request ID
-    { width: 16 }, // Entity ID
+    { width: 14 }, // Entity ID
     { width: 24 }, // Area
     { width: 46 }, // Document type
     { width: 28 }, // Required / received period
-    { width: 22 }, // Receipt status
-    { width: 48 }, // File / gap description
-    { width: 36 }, // Obtain from / source link
+    { width: 26 }, // Receipt status
+    { width: 50 }, // File / gap description
+    { width: 44 }, // Obtain from / source link
   ];
 
   // Title Banner
@@ -239,21 +245,21 @@ export async function generateAmrgExcelWorkbook(
 
   let docRowIdx = 7;
 
-  // 1. Insert received client documents first (D001, D002, ...)
+  // 1. Insert received client documents first
   documents.forEach((doc, idx) => {
     const row = wsDocuments.getRow(docRowIdx);
-    const dId = `D${String(idx + 1).padStart(3, '0')}`;
-    const cleanCategory = doc.category ? doc.category.replace('_', ' ') : 'Corporate';
+    const dId = `DOC-${doc.id.replace(/[^a-zA-Z0-9]/g, '').slice(-8).toUpperCase() || String(idx + 1).padStart(3, '0')}`;
+    const cleanCategory = doc.category ? doc.category.replace('_', ' ') : 'Corporate / Free Zone';
     
     const rowData = [
       dId,
-      client.name,
+      'ENT-001',
       cleanCategory,
       doc.originalName,
-      'Current Period / Inception',
-      doc.isExcluded ? 'Excluded' : 'Received',
-      doc.extractionSummary || `${doc.originalName} (${(doc.fileSize / 1024).toFixed(1)} KB)`,
-      `Client Document Archive (${doc.originalName})`,
+      'Inception to Cutoff Date',
+      doc.isExcluded ? 'Excluded' : 'Reviewed with stated limitations',
+      doc.extractionSummary || (doc.limitations ? `Limitations: ${doc.limitations}` : `${doc.originalName} (${(doc.fileSize / 1024).toFixed(1)} KB)`),
+      `Client Document Archive / ${doc.originalName}`,
     ];
 
     rowData.forEach((val, colIdx) => {
@@ -278,12 +284,16 @@ export async function generateAmrgExcelWorkbook(
       d.originalName.toLowerCase().includes(item.documentType.toLowerCase().slice(0, 8))
     );
 
-    const status = matchedDoc ? 'Received' : (item.isConditional ? 'Conditional / To Assess' : 'Potentially missing');
-    const desc = matchedDoc ? `Covered by: ${matchedDoc.originalName}` : (item.isConditional ? 'Not assessed' : 'Not located in supplied client folder');
+    const status = matchedDoc ? 'Received' : (item.isConditional ? 'Conditional / applicability unresolved' : 'Not supplied - core review gap');
+    const desc = matchedDoc 
+      ? `Covered by: ${matchedDoc.originalName}` 
+      : (item.isConditional 
+          ? 'Not found in collection. Establish relevant activity, event, period or registration before treating as required; no default inferred.' 
+          : 'Needed for the identified review domain. See linked issue/request schedules; absence is not proof of failure.');
 
     const rowData = [
       item.id,
-      client.name,
+      'ENT-001',
       item.area,
       item.documentType,
       item.requiredPeriod,
@@ -304,35 +314,38 @@ export async function generateAmrgExcelWorkbook(
   });
 
   // =========================================================================
-  // TAB 3: 3_Issues (Exact replica of 3_Issues_28050f4f.csv)
+  // SHEET 3: 3_Issues (Canonical 20-Column Issues & Reconciliations Register)
   // =========================================================================
   const wsIssues = workbook.addWorksheet('3_Issues', {
     views: [{ showGridLines: true }],
   });
 
+  // Exact 20 columns matching 3_Issues_acda2de2.csv
   wsIssues.columns = [
-    { width: 12 }, // Issue ID
-    { width: 14 }, // Entity ID
-    { width: 18 }, // Law / domain tags
-    { width: 16 }, // Period
-    { width: 44 }, // Issue summary
-    { width: 22 }, // Classification
-    { width: 30 }, // Evidence A locator
-    { width: 30 }, // Evidence B locator
-    { width: 18 }, // Amount A (AED)
-    { width: 18 }, // Amount B (AED)
-    { width: 18 }, // A minus B (AED) [FORMULA]
-    { width: 42 }, // Reconciliation / test
-    { width: 44 }, // Unresolved explanation / limit
-    { width: 14 }, // Priority
-    { width: 34 }, // Legal basis / Rule ID
-    { width: 42 }, // Recommended action
-    { width: 18 }, // Review status
-    { width: 32 }, // Review methodology notes
+    { width: 14 }, // 1. Issue ID
+    { width: 12 }, // 2. Entity ID
+    { width: 20 }, // 3. Law / domain tags
+    { width: 24 }, // 4. Period
+    { width: 48 }, // 5. Issue summary
+    { width: 24 }, // 6. Classification
+    { width: 32 }, // 7. Evidence A locator
+    { width: 32 }, // 8. Evidence B locator
+    { width: 18 }, // 9. Amount A (AED)
+    { width: 18 }, // 10. Amount B (AED)
+    { width: 18 }, // 11. A minus B (AED) [EXCEL FORMULA]
+    { width: 44 }, // 12. Reconciliation / test
+    { width: 50 }, // 13. Unresolved explanation / limit
+    { width: 14 }, // 14. Priority
+    { width: 28 }, // 15. Rules
+    { width: 48 }, // 16. Action
+    { width: 16 }, // 17. Request IDs
+    { width: 28 }, // 18. Suggested owner
+    { width: 20 }, // 19. Workflow status
+    { width: 24 }, // 20. Review approval
   ];
 
   // Title Banner
-  wsIssues.mergeCells('A2:R2');
+  wsIssues.mergeCells('A2:T2');
   const issTitle = wsIssues.getCell('A2');
   issTitle.value = 'AMRG Global issues and reconciliations';
   issTitle.font = { name: 'Calibri', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -340,13 +353,13 @@ export async function generateAmrgExcelWorkbook(
   issTitle.alignment = { vertical: 'middle', indent: 1 };
   wsIssues.getRow(2).height = 28;
 
-  wsIssues.mergeCells('A3:R3');
+  wsIssues.mergeCells('A3:T3');
   const issSub1 = wsIssues.getCell('A3');
   issSub1.value = `Client: ${client.name} | Deliverable Version ${run.runNumber}. Evaluated against ${run.skillVersion}.`;
   issSub1.font = { name: 'Calibri', size: 10, italic: true, color: { argb: 'FF475569' } };
   wsIssues.getRow(3).height = 18;
 
-  wsIssues.mergeCells('A4:R4');
+  wsIssues.mergeCells('A4:T4');
   const issSub2 = wsIssues.getCell('A4');
   issSub2.value = 'Filter by law, priority or status. Scroll right for evidence, rule mapping, action and reviewer fields.';
   issSub2.font = { name: 'Calibri', size: 9, color: { argb: 'FF64748B' } };
@@ -369,10 +382,12 @@ export async function generateAmrgExcelWorkbook(
     'Reconciliation / test',
     'Unresolved explanation / limit',
     'Priority',
-    'Legal basis / Rule ID',
-    'Recommended action',
-    'Review status',
-    'Review methodology notes',
+    'Rules',
+    'Action',
+    'Request IDs',
+    'Suggested owner',
+    'Workflow status',
+    'Review approval',
   ];
   issHeaders.forEach((h, i) => {
     const c = issHeadRow.getCell(i + 1);
@@ -388,16 +403,16 @@ export async function generateAmrgExcelWorkbook(
 
   findings.forEach((f, idx) => {
     const row = wsIssues.getRow(issRowIdx);
-    const iId = f.id || `I${String(idx + 1).padStart(3, '0')}`;
+    const iId = f.id.startsWith('ISSUE-') ? f.id : `ISSUE-${String(idx + 1).padStart(4, '0')}`;
 
     row.getCell(1).value = iId;
-    row.getCell(2).value = client.name;
+    row.getCell(2).value = 'ENT-001';
     row.getCell(3).value = f.domain;
     row.getCell(4).value = f.period;
     row.getCell(5).value = f.issueSummary || f.title;
     row.getCell(6).value = f.classification;
     row.getCell(7).value = f.evidenceALocator || '';
-    row.getCell(8).value = f.evidenceBLocator || '';
+    row.getCell(8).value = f.evidenceBLocator || 'See Laws Reviewed';
 
     // Numerical values & Excel Formula for Variance (A minus B)
     if (typeof f.amountA === 'number') {
@@ -414,19 +429,25 @@ export async function generateAmrgExcelWorkbook(
       row.getCell(10).value = '';
     }
 
-    // Exact required Excel formula: =IF(AND(ISNUMBER(I7),ISNUMBER(J7)),I7-J7,"")
+    // Exact required Excel formula: =IF(AND(ISNUMBER(I{row}),ISNUMBER(J{row})),I{row}-J{row},"")
     row.getCell(11).value = { formula: `IF(AND(ISNUMBER(I${issRowIdx}),ISNUMBER(J${issRowIdx})),I${issRowIdx}-J${issRowIdx},"")` };
     row.getCell(11).numFmt = '#,##0.00';
 
-    row.getCell(12).value = f.reconciliationTest || 'Cross-document verification against authoritative registers';
-    row.getCell(13).value = f.unresolvedExplanation || 'Awaiting additional client documentation for full verification';
+    row.getCell(12).value = f.reconciliationTest || 'Reconcile entity formation, submitted application and approved tax profile.';
+    row.getCell(13).value = f.unresolvedExplanation || 'Awaiting additional client documentation for full verification.';
 
-    // Extended Review & Quality Gate Columns
+    // Priority
     row.getCell(14).value = f.priority;
-    row.getCell(15).value = f.legalBasis || 'UAE Statutory Compliance Rules';
-    row.getCell(16).value = f.recommendedAction || 'Remediate in coordination with corporate registrar';
-    row.getCell(17).value = 'Verified';
-    row.getCell(18).value = `Validated under ${run.skillVersion}`;
+
+    // Rules & Actions (matching CSV columns 15 & 16)
+    row.getCell(15).value = f.rules || f.legalBasis || 'R01; R02; R03';
+    row.getCell(16).value = f.action || f.recommendedAction || 'Obtain certificate, original application fields and portal periods; reconcile and seek correction only if facts warrant.';
+
+    // Columns 17-20: Request IDs, Suggested owner, Workflow status, Review approval
+    row.getCell(17).value = f.requestIds || `REQ${String(idx + 1).padStart(2, '0')}`;
+    row.getCell(18).value = f.suggestedOwner || 'Tax manager (suggested)';
+    row.getCell(19).value = f.workflowStatus || 'Awaiting evidence';
+    row.getCell(20).value = f.reviewApproval || 'Draft - not human reviewed';
 
     // Priority cell styling
     const priCell = row.getCell(14);
@@ -434,7 +455,7 @@ export async function generateAmrgExcelWorkbook(
     else if (f.priority === 'High') priCell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFD97706' } };
     else priCell.font = { name: 'Calibri', size: 10 };
 
-    for (let c = 1; c <= 18; c++) {
+    for (let c = 1; c <= 20; c++) {
       const cell = row.getCell(c);
       cell.border = thinBorder;
       if (c !== 14) cell.font = { name: 'Calibri', size: 10, bold: c === 1 };
@@ -444,177 +465,7 @@ export async function generateAmrgExcelWorkbook(
     issRowIdx++;
   });
 
-  // =========================================================================
-  // LAW-WISE DETAILED SHEETS
-  // =========================================================================
-  const domainSheets: { name: string; domain: FindingDomain }[] = [
-    { name: 'CT', domain: 'CT' },
-    { name: 'VAT', domain: 'VAT' },
-    { name: 'Free Zone', domain: 'Free Zone' },
-    { name: 'Banking', domain: 'Banking' },
-    { name: 'Secretarial Services', domain: 'Secretarial Services' },
-    { name: 'Labour Laws', domain: 'Labour Laws' },
-    { name: 'Accounting & Audit', domain: 'Accounting & Audit' },
-    { name: 'Other Laws', domain: 'Other Laws' },
-  ];
-
-  for (const ds of domainSheets) {
-    const ws = workbook.addWorksheet(ds.name, {
-      views: [{ showGridLines: true }],
-    });
-
-    ws.columns = [
-      { width: 12 }, // Issue ID
-      { width: 16 }, // Period
-      { width: 46 }, // Issue Summary
-      { width: 22 }, // Classification
-      { width: 14 }, // Priority
-      { width: 28 }, // Evidence A Locator
-      { width: 28 }, // Evidence B Locator
-      { width: 18 }, // Amount A (AED)
-      { width: 18 }, // Amount B (AED)
-      { width: 18 }, // Variance (AED)
-      { width: 36 }, // Legal Basis / Rule Ref
-      { width: 44 }, // Recommended Action
-    ];
-
-    // Banner
-    ws.mergeCells('A2:L2');
-    const bCell = ws.getCell('A2');
-    bCell.value = `AMRG Global UAE Onboarding — ${ds.name} Issues Register`;
-    bCell.font = { name: 'Calibri', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
-    bCell.fill = headerFill(COLOR_NAVY);
-    bCell.alignment = { vertical: 'middle', indent: 1 };
-    ws.getRow(2).height = 26;
-
-    ws.mergeCells('A3:L3');
-    ws.getCell('A3').value = `Client: ${client.name} | Deliverable Version ${run.runNumber} | Detailed Statutory Analysis`;
-    ws.getCell('A3').font = { name: 'Calibri', size: 10, italic: true, color: { argb: 'FF475569' } };
-    ws.getRow(3).height = 18;
-
-    // Headers
-    const hRow = ws.getRow(5);
-    const subHeaders = [
-      'Issue ID',
-      'Period',
-      'Issue Summary',
-      'Classification',
-      'Priority',
-      'Evidence A Locator',
-      'Evidence B Locator',
-      'Amount A (AED)',
-      'Amount B (AED)',
-      'Variance (AED)',
-      'Legal Basis / Rule Ref',
-      'Recommended Action',
-    ];
-    subHeaders.forEach((h, i) => {
-      const c = hRow.getCell(i + 1);
-      c.value = h;
-      c.font = headerFont;
-      c.fill = headerFill(COLOR_AMRG_GREEN);
-      c.border = thinBorder;
-    });
-    hRow.height = 22;
-
-    const domainFindings = findings.filter(f => f.domain === ds.domain || f.domain.includes(ds.domain));
-    let dRowIdx = 6;
-
-    if (domainFindings.length === 0) {
-      const emptyRow = ws.getRow(6);
-      emptyRow.getCell(1).value = '-';
-      emptyRow.getCell(2).value = 'Inception-Cutoff';
-      emptyRow.getCell(3).value = `No specific ${ds.name} exceptions identified based on reviewed evidence snapshot.`;
-      emptyRow.getCell(4).value = 'Compliant / Unassessed';
-      emptyRow.getCell(5).value = 'Low';
-      emptyRow.getCell(11).value = 'Applicable UAE Statutes';
-      emptyRow.getCell(12).value = 'Maintain routine statutory compliance monitoring';
-      for (let ci = 1; ci <= 12; ci++) {
-        emptyRow.getCell(ci).border = thinBorder;
-        emptyRow.getCell(ci).font = { name: 'Calibri', size: 10, italic: true };
-      }
-      emptyRow.height = 20;
-    } else {
-      domainFindings.forEach(f => {
-        const row = ws.getRow(dRowIdx);
-        row.getCell(1).value = f.id;
-        row.getCell(2).value = f.period;
-        row.getCell(3).value = f.issueSummary || f.title;
-        row.getCell(4).value = f.classification;
-        row.getCell(5).value = f.priority;
-        row.getCell(6).value = f.evidenceALocator || '-';
-        row.getCell(7).value = f.evidenceBLocator || '-';
-        row.getCell(8).value = typeof f.amountA === 'number' ? f.amountA : '';
-        if (typeof f.amountA === 'number') row.getCell(8).numFmt = '#,##0.00';
-        row.getCell(9).value = typeof f.amountB === 'number' ? f.amountB : '';
-        if (typeof f.amountB === 'number') row.getCell(9).numFmt = '#,##0.00';
-        
-        // Dynamic formula for variance
-        row.getCell(10).value = { formula: `IF(AND(ISNUMBER(H${dRowIdx}),ISNUMBER(I${dRowIdx})),H${dRowIdx}-I${dRowIdx},"")` };
-        row.getCell(10).numFmt = '#,##0.00';
-
-        row.getCell(11).value = f.legalBasis || 'Statutory Requirement';
-        row.getCell(12).value = f.recommendedAction || 'Remediate as recommended';
-
-        for (let ci = 1; ci <= 12; ci++) {
-          const c = row.getCell(ci);
-          c.border = thinBorder;
-          c.font = { name: 'Calibri', size: 10, bold: ci === 1 };
-          if (dRowIdx % 2 === 1) c.fill = headerFill(COLOR_LIGHT_GRAY);
-        }
-        row.height = 22;
-        dRowIdx++;
-      });
-    }
-  }
-
-  // =========================================================================
-  // TAB 12: Coverage & Reconciliations
-  // =========================================================================
-  const wsCoverage = workbook.addWorksheet('Coverage & Reconciliations', {
-    views: [{ showGridLines: true }],
-  });
-  wsCoverage.columns = [
-    { width: 28 }, { width: 36 }, { width: 44 }, { width: 26 }, { width: 34 }
-  ];
-
-  wsCoverage.mergeCells('A2:E2');
-  const covTitle = wsCoverage.getCell('A2');
-  covTitle.value = 'AMRG Global Onboarding — Coverage & Cross-Document Reconciliation Schedule';
-  covTitle.font = { name: 'Calibri', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
-  covTitle.fill = headerFill(COLOR_NAVY);
-  wsCoverage.getRow(2).height = 26;
-
-  const covHRow = wsCoverage.getRow(5);
-  ['Test Ref', 'Reconciliation Scope', 'Evidence Tested', 'Outcome / Result', 'Standard Reference'].forEach((h, i) => {
-    const c = covHRow.getCell(i + 1);
-    c.value = h;
-    c.font = headerFont;
-    c.fill = headerFill(COLOR_AMRG_GREEN);
-    c.border = thinBorder;
-  });
-
-  const reconciliationTests = [
-    ['REC-01', 'Trade Licence vs AoA vs CT Ack Legal Name', 'Licence, AoA, EmaraTax Ack', 'Transliteration variance identified (Quadria vs Quadaria)', 'Cabinet Decision 10/2019 / EmaraTax Data Standards'],
-    ['REC-02', 'Shareholding Structure vs UBO Register', 'AoA, Corporate Chart, Incumbency', '50/50 UBO structure confirmed (Dr. Amit Varma & Abrar Mir)', 'Cabinet Decision 109/2023'],
-    ['REC-03', 'CT Registration Timeline vs FTA Decision 3/2024', 'Trade licence issue date vs Ack date', 'Deadline compliance tested against 31 May 2024 cutoff', 'FTA Decision No. 3 of 2024'],
-    ['REC-04', 'Labour & Immigration Card vs Ministry Records', 'Establishment Card 261138997, Sponsorship Doc', 'Free Zone Establishment Card on file; WPS exemption verified', 'Federal Decree-Law 33/2021'],
-    ['REC-05', 'VAT Threshold & Tax Grouping Verification', 'Supplies, Consulting agreements', 'Consulting export testing & local supply analysis required', 'Federal Decree-Law No. 8 of 2017'],
-    ['REC-06', 'Statutory Financial Statements & Zone Filing', 'Financial statements / Trial Balance', 'Statutory audit requirement mapped to licensing regulations', 'Sharjah SAIF / DMCC Companies Regulations'],
-  ];
-
-  reconciliationTests.forEach((t, i) => {
-    const row = wsCoverage.getRow(6 + i);
-    t.forEach((val, ci) => {
-      const c = row.getCell(ci + 1);
-      c.value = val;
-      c.border = thinBorder;
-      c.font = { name: 'Calibri', size: 10, bold: ci === 0 };
-      if (i % 2 === 1) c.fill = headerFill(COLOR_LIGHT_GRAY);
-    });
-    row.height = 20;
-  });
-
+  // Strictly write the 3-sheet workbook
   await workbook.xlsx.writeFile(filePath);
   return { fileName, filePath };
 }

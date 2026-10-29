@@ -126,6 +126,12 @@ export interface ReviewFinding {
   reconciliationTest?: string;
 
   legalBasis?: string;
+  rules?: string;
+  action?: string;
+  requestIds?: string;
+  suggestedOwner?: string;
+  workflowStatus?: string;
+  reviewApproval?: string;
   unresolvedExplanation?: string;
   recommendedAction: string;
 }
