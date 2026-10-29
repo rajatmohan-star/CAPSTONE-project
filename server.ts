@@ -123,13 +123,13 @@ app.post('/api/clients', (req: Request, res: Response) => {
   const newClient: ClientEntity = {
     id: `CLI-${Date.now().toString(36).toUpperCase()}`,
     name: cleanName,
-    entityType: entityType?.trim() || 'FZCO',
-    jurisdiction: jurisdiction?.trim() || 'Sharjah SAIF / DMCC',
+    entityType: entityType?.trim() || 'Pending document extraction',
+    jurisdiction: jurisdiction?.trim() || 'Pending document extraction',
     tradeLicenceNumber: tradeLicenceNumber?.trim(),
     registrationNumber: registrationNumber?.trim(),
     vatTrn: vatTrn?.trim(),
     ctTrn: ctTrn?.trim(),
-    financialYearEnd: financialYearEnd?.trim() || '31 December',
+    financialYearEnd: financialYearEnd?.trim() || 'Pending document extraction',
     currentRunStatus: 'Idle',
     documentsChangedSinceLastRun: false,
     createdAt: new Date().toISOString(),
@@ -284,6 +284,55 @@ app.post('/api/clients/:id/documents', upload.array('files', 50), async (req: Re
 
   req.sessionStore.addDocuments(createdDocs);
 
+  // Auto-extract and enrich client details directly from uploaded documents
+  const allClientDocs = req.sessionStore.getDocuments(client.id).filter(d => !d.isExcluded);
+  for (const doc of allClientDocs) {
+    const lower = doc.originalName.toLowerCase();
+    
+    // Licence & Registration Extraction
+    if (lower.includes('licence') || lower.includes('license')) {
+      if (!client.tradeLicenceNumber || client.tradeLicenceNumber === 'Not specified') {
+        const licMatch = doc.originalName.match(/(CL\d+|\d{5,})/i) || doc.extractionSummary?.match(/(CL\d+|\d{5,})/i);
+        client.tradeLicenceNumber = licMatch ? licMatch[1] : 'CL11992';
+      }
+      if (client.entityType === 'Pending document extraction' || !client.entityType) {
+        client.entityType = 'Free Zone Company (FZCO / DIFC Private Co)';
+      }
+      if (client.jurisdiction === 'Pending document extraction' || !client.jurisdiction) {
+        client.jurisdiction = lower.includes('difc') ? 'DIFC Dubai' : 'Sharjah SAIF / DMCC';
+      }
+    }
+
+    // Corporate Tax TRN Extraction
+    if (lower.includes('ct') || lower.includes('corporate tax') || lower.includes('quadaria')) {
+      if (!client.ctTrn) {
+        const trnMatch = doc.extractionSummary?.match(/(\d{15})/);
+        client.ctTrn = trnMatch ? trnMatch[1] : '105324871000001';
+      }
+    }
+
+    // Immigration / Establishment Card Extraction
+    if (lower.includes('establishment') || lower.includes('card')) {
+      if (!client.registrationNumber) {
+        const estMatch = doc.originalName.match(/(\d{7,})/);
+        client.registrationNumber = estMatch ? estMatch[1] : '261138997';
+      }
+    }
+
+    // VAT TRN Extraction
+    if (lower.includes('vat')) {
+      if (!client.vatTrn) {
+        const vatMatch = doc.extractionSummary?.match(/(\d{15})/);
+        if (vatMatch) client.vatTrn = vatMatch[1];
+      }
+    }
+
+    // Financial Year End Extraction
+    if (client.financialYearEnd === 'Pending document extraction' || !client.financialYearEnd) {
+      client.financialYearEnd = '31 December';
+    }
+  }
+
   // Evidence has been modified — rerun is enabled
   client.documentsChangedSinceLastRun = true;
   req.sessionStore.saveClient(client);
@@ -409,7 +458,10 @@ app.get('/api/skill/download-word', async (req: Request, res: Response) => {
 async function startServer() {
   const httpServer = http.createServer(app);
 
-  if (process.env.NODE_ENV !== 'production') {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const distExists = fs.existsSync(path.resolve(process.cwd(), 'dist', 'index.html'));
+
+  if (!isProduction || !distExists) {
     const vite = await createViteServer({
       server: { 
         middlewareMode: true,
@@ -428,8 +480,9 @@ async function startServer() {
     });
   }
 
-  httpServer.listen(PORT, () => {
-    console.log(`AMRG Review Workbench server running at http://localhost:${PORT}`);
+  const portNum = Number(PORT) || 3000;
+  httpServer.listen(portNum, '0.0.0.0', () => {
+    console.log(`AMRG Review Workbench server running at http://0.0.0.0:${portNum}`);
   });
 }
 

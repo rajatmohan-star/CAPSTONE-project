@@ -9,6 +9,7 @@ import {
   FileSpreadsheet, 
   Search 
 } from 'lucide-react';
+import { AmrgLogo } from '../common/AmrgLogo.js';
 import { useWorkbench } from '../../context/WorkbenchContext.js';
 import { GeneratedReport } from '../../types/workbench.js';
 
@@ -37,17 +38,20 @@ export const ReportsView: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900">Generated Excel Deliverables</h1>
-          <p className="text-xs text-slate-500 mt-1">
-            Official 12-sheet Excel workbooks generated across your private client onboarding workspaces.
-          </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="flex items-center gap-4">
+          <AmrgLogo size="md" showSubtitle={false} className="shrink-0" />
+          <div className="border-l border-slate-200 pl-4">
+            <h1 className="text-xl font-bold text-slate-900">Generated Excel Deliverables</h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Official 3-sheet Excel workbooks generated across your client onboarding workspaces.
+            </p>
+          </div>
         </div>
 
         <button
           onClick={() => { window.location.href = '/api/template/download'; }}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#0A7C3B] border border-[#0A7C3B]/30 hover:bg-[#0A7C3B]/5 rounded-lg transition-colors cursor-pointer"
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#0A7C3B] border border-[#0A7C3B]/30 hover:bg-[#0A7C3B]/5 rounded-xl transition-colors cursor-pointer shrink-0"
         >
           <Download className="w-3.5 h-3.5" />
           <span>Download Blank Template</span>

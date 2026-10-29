@@ -15,6 +15,7 @@ import {
   Search, 
   Trash2 
 } from 'lucide-react';
+import { AmrgLogo } from '../common/AmrgLogo.js';
 import { useWorkbench } from '../../context/WorkbenchContext.js';
 
 interface ClientsListViewProps {
@@ -39,17 +40,20 @@ export const ClientsListView: React.FC<ClientsListViewProps> = ({
   return (
     <div className="space-y-6">
       {/* Header bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900">Client Onboarding Workspaces</h1>
-          <p className="text-xs text-slate-500 mt-1">
-            Manage UAE onboarding workspaces, evidence files, and generated Excel compliance deliverables.
-          </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="flex items-center gap-4">
+          <AmrgLogo size="md" showSubtitle={false} className="shrink-0" />
+          <div className="border-l border-slate-200 pl-4">
+            <h1 className="text-xl font-bold text-slate-900">Client Onboarding Workspaces</h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Manage UAE onboarding workspaces, evidence files, and generated Excel deliverables.
+            </p>
+          </div>
         </div>
 
         <button
           onClick={onOpenNewClient}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-[#0A7C3B] hover:bg-[#08632f] text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-[#0A7C3B] hover:bg-[#08632f] text-white text-xs font-semibold rounded-xl shadow-xs transition-colors cursor-pointer shrink-0"
         >
           <Plus className="w-4 h-4" />
           <span>New Client</span>

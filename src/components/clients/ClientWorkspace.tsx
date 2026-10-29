@@ -21,6 +21,7 @@ import {
   Upload 
 } from 'lucide-react';
 import { apiFetch, useWorkbench } from '../../context/WorkbenchContext.js';
+import { AmrgLogo } from '../common/AmrgLogo.js';
 import { ClientEntity, GeneratedReport, RunSnapshot, UploadedDocument } from '../../types/workbench.js';
 
 interface ClientWorkspaceProps {
@@ -303,12 +304,15 @@ export const ClientWorkspace: React.FC<ClientWorkspaceProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={() => setIsEditingInfo(!isEditingInfo)}
-            className="text-xs text-[#0A7C3B] hover:text-[#08632f] font-medium px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
-          >
-            {isEditingInfo ? 'Cancel' : 'Edit Details'}
-          </button>
+          <div className="flex items-center gap-3">
+            <AmrgLogo size="sm" showSubtitle={false} className="hidden sm:flex border border-slate-200/80 rounded-xl px-2.5 py-1 bg-slate-50/70" />
+            <button
+              onClick={() => setIsEditingInfo(!isEditingInfo)}
+              className="text-xs text-[#0A7C3B] hover:text-[#08632f] font-medium px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+            >
+              {isEditingInfo ? 'Cancel' : 'Edit Details'}
+            </button>
+          </div>
         </div>
 
         {/* Detailed Fields */}

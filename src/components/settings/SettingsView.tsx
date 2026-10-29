@@ -14,6 +14,7 @@ import {
   ShieldCheck, 
   Trash2 
 } from 'lucide-react';
+import { AmrgLogo } from '../common/AmrgLogo.js';
 import { useWorkbench } from '../../context/WorkbenchContext.js';
 
 export const SettingsView: React.FC = () => {
@@ -41,11 +42,14 @@ export const SettingsView: React.FC = () => {
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
-      <div>
-        <h1 className="text-xl font-bold text-slate-900">Settings & Approved Deliverables</h1>
-        <p className="text-xs text-slate-500 mt-1">
-          Download the canonical AMRG Excel template, access the published onboarding skill methodology, and manage private session isolation.
-        </p>
+      <div className="flex items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+        <AmrgLogo size="md" showSubtitle={false} className="shrink-0" />
+        <div className="border-l border-slate-200 pl-4">
+          <h1 className="text-xl font-bold text-slate-900">Settings & Approved Deliverables</h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Download the canonical AMRG Excel template, access the published onboarding skill methodology, and manage private session isolation.
+          </p>
+        </div>
       </div>
 
       {/* Deliverable Downloads Section */}
@@ -67,7 +71,7 @@ export const SettingsView: React.FC = () => {
               <div>
                 <h3 className="text-sm font-bold text-slate-900">Approved Excel Template</h3>
                 <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                  Canonical 12-sheet AMRG workbook containing Client Details, Master Checklist, Issues with column K variance formula, and domain tabs.
+                  Canonical 3-sheet AMRG workbook containing 1_Client_Details, 2_Documents checklist, and 3_Issues register with column K formula.
                 </p>
               </div>
             </div>

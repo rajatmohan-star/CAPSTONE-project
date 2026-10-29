@@ -9,6 +9,7 @@ import { ClientWorkspace } from './components/clients/ClientWorkspace.js';
 import { CreateClientModal } from './components/clients/CreateClientModal.js';
 import { DashboardView } from './components/dashboard/DashboardView.js';
 import { Header } from './components/layout/Header.js';
+import { AmrgLogo } from './components/common/AmrgLogo.js';
 import { ReportsView } from './components/reports/ReportsView.js';
 import { SettingsView } from './components/settings/SettingsView.js';
 import { useWorkbench, WorkbenchProvider } from './context/WorkbenchContext.js';
@@ -86,6 +87,22 @@ function MainApp() {
 
         {currentTab === 'settings' && <SettingsView />}
       </main>
+
+      {/* Grounded AMRG Global Footer */}
+      <footer className="border-t border-slate-200 bg-white py-6 mt-auto">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <AmrgLogo size="sm" showSubtitle={true} />
+          
+          <div className="text-center sm:text-right">
+            <p className="text-[11px] text-slate-500 font-medium">
+              AMRG Global UAE Corporate, Tax & Advisory Practice • Dubai • Abu Dhabi • DIFC
+            </p>
+            <p className="text-[10px] text-slate-400 mt-0.5">
+              Approved UAE Onboarding Review Skill v2.4 • Confidential Client Deliverables
+            </p>
+          </div>
+        </div>
+      </footer>
 
       {/* Create Client Modal */}
       <CreateClientModal

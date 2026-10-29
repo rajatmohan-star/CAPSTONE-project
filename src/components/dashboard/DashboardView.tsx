@@ -16,6 +16,7 @@ import {
   Plus, 
   ShieldCheck 
 } from 'lucide-react';
+import { AmrgLogo } from '../common/AmrgLogo.js';
 import { useWorkbench } from '../../context/WorkbenchContext.js';
 
 interface DashboardViewProps {
@@ -45,19 +46,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="space-y-8">
-      {/* Welcome Banner */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-        <div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-[#0A7C3B] uppercase tracking-wider">
-            <ShieldCheck className="w-4 h-4" />
-            <span>AMRG Global UAE Corporate, Tax & Advisory Practice</span>
+      {/* Welcome Banner with AMRG Global Brand Lockup */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-7 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+        <div className="flex items-start sm:items-center gap-5">
+          <AmrgLogo size="xl" showSubtitle={false} className="shrink-0" />
+          <div className="border-l border-slate-200 pl-5">
+            <div className="flex items-center gap-2 text-xs font-semibold text-[#0A7C3B] uppercase tracking-wider">
+              <ShieldCheck className="w-4 h-4" />
+              <span>AMRG Global UAE Corporate, Tax & Advisory Practice</span>
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900 mt-1">
+              AMRG Review Workbench
+            </h1>
+            <p className="text-xs text-slate-600 mt-1.5 max-w-2xl leading-relaxed">
+              Upload client corporate and statutory evidence, apply the published AMRG UAE onboarding skill, verify cross-document consistency, and produce the canonical 3-sheet Excel compliance deliverable.
+            </p>
           </div>
-          <h1 className="text-2xl font-bold text-slate-900 mt-1">
-            AMRG Review Workbench
-          </h1>
-          <p className="text-xs text-slate-600 mt-1.5 max-w-2xl leading-relaxed">
-            Upload client corporate and statutory evidence, apply the published AMRG UAE onboarding skill, verify cross-document consistency, and produce the canonical 12-sheet Excel compliance deliverable.
-          </p>
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
