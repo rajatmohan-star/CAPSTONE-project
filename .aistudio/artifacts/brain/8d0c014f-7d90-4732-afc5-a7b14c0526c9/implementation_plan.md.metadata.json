@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for AMRG Review Workbench covering the UAE Client Onboarding Review workflow, document intake and OCR extraction, cross-document reconciliation engine, reviewer approval audit trail, Excel export preserving fixed template schemas, and role-based access control.",
+  "updatedAt":  "2026-10-27T20:59:02.369672971Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
