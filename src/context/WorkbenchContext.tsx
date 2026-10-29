@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { Assignment, ClientEntity, UserProfile, UserRole } from '../types/workbench.js';
+import { ClientEntity, GeneratedReport } from '../types/workbench.js';
 
 interface Toast {
   id: string;
@@ -13,15 +13,17 @@ interface Toast {
 }
 
 interface WorkbenchContextType {
-  currentUser: UserProfile;
-  switchRole: (role: UserRole) => void;
-  users: UserProfile[];
-  assignments: Assignment[];
+  sessionId: string;
   clients: ClientEntity[];
-  activeAssignmentId: string | null;
-  setActiveAssignmentId: (id: string | null) => void;
-  refreshAssignments: () => Promise<void>;
+  reports: GeneratedReport[];
+  activeClientId: string | null;
+  setActiveClientId: (id: string | null) => void;
   refreshClients: () => Promise<void>;
+  refreshReports: () => Promise<void>;
+  createClient: (data: Partial<ClientEntity>) => Promise<ClientEntity>;
+  deleteClient: (id: string) => Promise<boolean>;
+  updateClient: (id: string, updates: Partial<ClientEntity>) => Promise<ClientEntity>;
+  resetSession: () => Promise<void>;
   toasts: Toast[];
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   dismissToast: (id: string) => void;
@@ -30,17 +32,23 @@ interface WorkbenchContextType {
 
 const WorkbenchContext = createContext<WorkbenchContextType | undefined>(undefined);
 
+// Helper for session-authenticated fetch
+export function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const sessionId = localStorage.getItem('amrg_session_id') || '';
+  const headers = new Headers(options.headers || {});
+  if (sessionId) {
+    headers.set('X-AMRG-Session', sessionId);
+  }
+  return fetch(url, { ...options, headers });
+}
+
 export const WorkbenchProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [users, setUsers] = useState<UserProfile[]>([]);
-  const [currentUser, setCurrentUser] = useState<UserProfile>({
-    id: 'usr-admin',
-    name: 'Rajat Mohan',
-    email: 'rajat.mohan@icai.org',
-    role: 'Administrator',
+  const [sessionId, setSessionId] = useState<string>(() => {
+    return localStorage.getItem('amrg_session_id') || '';
   });
-  const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [clients, setClients] = useState<ClientEntity[]>([]);
-  const [activeAssignmentId, setActiveAssignmentId] = useState<string | null>(null);
+  const [reports, setReports] = useState<GeneratedReport[]>([]);
+  const [activeClientId, setActiveClientId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isAiConfigured, setIsAiConfigured] = useState<boolean>(true);
 
@@ -54,21 +62,29 @@ export const WorkbenchProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
-  const refreshAssignments = async () => {
-    try {
-      const res = await fetch('/api/assignments');
-      if (res.ok) {
-        const data = await res.json();
-        setAssignments(data);
-      }
-    } catch (err) {
-      console.error('Failed to fetch assignments:', err);
-    }
-  };
+  // Initialize session
+  useEffect(() => {
+    apiFetch('/api/session')
+      .then(res => res.json())
+      .then(data => {
+        if (data.sessionId) {
+          setSessionId(data.sessionId);
+          localStorage.setItem('amrg_session_id', data.sessionId);
+        }
+      })
+      .catch(console.error);
+
+    apiFetch('/api/health')
+      .then(res => res.json())
+      .then(data => {
+        setIsAiConfigured(data.aiConfigured !== false);
+      })
+      .catch(console.error);
+  }, []);
 
   const refreshClients = async () => {
     try {
-      const res = await fetch('/api/clients');
+      const res = await apiFetch('/api/clients');
       if (res.ok) {
         const data = await res.json();
         setClients(data);
@@ -78,52 +94,101 @@ export const WorkbenchProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
+  const refreshReports = async () => {
+    try {
+      const res = await apiFetch('/api/reports');
+      if (res.ok) {
+        const data = await res.json();
+        setReports(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch reports:', err);
+    }
+  };
+
   useEffect(() => {
-    // Initial fetch
-    fetch('/api/users')
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
-          setUsers(data);
-          setCurrentUser(data[0]);
-        }
-      })
-      .catch(console.error);
-
-    fetch('/api/health')
-      .then(res => res.json())
-      .then(data => {
-        setIsAiConfigured(data.aiConfigured !== false);
-      })
-      .catch(console.error);
-
-    refreshAssignments();
     refreshClients();
-  }, []);
+    refreshReports();
+  }, [sessionId]);
 
-  const switchRole = (role: UserRole) => {
-    const found = users.find(u => u.role === role);
-    if (found) {
-      setCurrentUser(found);
-      showToast(`Switched active role to ${role} (${found.name})`, 'info');
-    } else {
-      setCurrentUser(prev => ({ ...prev, role }));
-      showToast(`Switched active role to ${role}`, 'info');
+  const createClient = async (data: Partial<ClientEntity>): Promise<ClientEntity> => {
+    const res = await apiFetch('/api/clients', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to create client workspace');
+    }
+
+    const newClient = await res.json();
+    setClients(prev => [...prev, newClient]);
+    showToast(`Client workspace created: ${newClient.name}`, 'success');
+    return newClient;
+  };
+
+  const deleteClient = async (id: string): Promise<boolean> => {
+    const res = await apiFetch(`/api/clients/${id}`, {
+      method: 'DELETE',
+    });
+
+    if (res.ok) {
+      setClients(prev => prev.filter(c => c.id !== id));
+      if (activeClientId === id) {
+        setActiveClientId(null);
+      }
+      showToast('Client workspace deleted', 'info');
+      refreshReports();
+      return true;
+    }
+    return false;
+  };
+
+  const updateClient = async (id: string, updates: Partial<ClientEntity>): Promise<ClientEntity> => {
+    const res = await apiFetch(`/api/clients/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+
+    if (!res.ok) {
+      throw new Error('Failed to update client details');
+    }
+
+    const updated = await res.json();
+    setClients(prev => prev.map(c => (c.id === id ? updated : c)));
+    showToast('Client details updated', 'success');
+    return updated;
+  };
+
+  const resetSession = async (): Promise<void> => {
+    try {
+      await apiFetch('/api/session/reset', { method: 'POST' });
+      setClients([]);
+      setReports([]);
+      setActiveClientId(null);
+      showToast('Session cleared. Starting with fresh clean workspace.', 'info');
+    } catch (err) {
+      console.error('Failed to reset session:', err);
     }
   };
 
   return (
     <WorkbenchContext.Provider
       value={{
-        currentUser,
-        switchRole,
-        users,
-        assignments,
+        sessionId,
         clients,
-        activeAssignmentId,
-        setActiveAssignmentId,
-        refreshAssignments,
+        reports,
+        activeClientId,
+        setActiveClientId,
         refreshClients,
+        refreshReports,
+        createClient,
+        deleteClient,
+        updateClient,
+        resetSession,
         toasts,
         showToast,
         dismissToast,

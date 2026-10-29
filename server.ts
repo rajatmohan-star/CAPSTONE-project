@@ -5,22 +5,27 @@
 
 import crypto from 'crypto';
 import fs from 'fs';
+import http from 'http';
 import path from 'path';
-import express, { Request, Response } from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import JSZip from 'jszip';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
-import { generateAmrgExcelWorkbook } from './src/server/excelGenerator.js';
 import { extractDocumentWithGemini } from './src/server/geminiService.js';
-import { MASTER_CHECKLIST, UAE_ONBOARDING_SKILL_META } from './src/server/masterData.js';
 import { executeReviewRun } from './src/server/reviewEngine.js';
-import { storage, UPLOADS_DIR } from './src/server/storage.js';
-import { 
-  Assignment, 
-  ClientEntity, 
-  GeneratedReport, 
-  UploadedDocument 
-} from './src/types/workbench.js';
+import { getSessionStore, SessionStore } from './src/server/sessionStorage.js';
+import { generateBlankExcelTemplate, generateSkillDocx, loadPublishedOnboardingSkill } from './src/server/skillService.js';
+import { ClientEntity, UploadedDocument } from './src/types/workbench.js';
+
+// Extend Express Request to include sessionStore
+declare global {
+  namespace Express {
+    interface Request {
+      sessionStore: SessionStore;
+      sessionId: string;
+    }
+  }
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,20 +33,67 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Multer storage
-const upload = multer({
-  dest: path.join(process.cwd(), 'data', 'temp'),
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB per file
+// ----------------------------------------------------
+// SESSION ISOLATION MIDDLEWARE
+// ----------------------------------------------------
+// Ensures every visitor operates inside a private isolated session.
+// Client records, uploaded documents, and generated reports are strictly segregated.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  // Simple cookie parser helper
+  let cookieSessionId: string | undefined = undefined;
+  const cookieHeader = req.headers.cookie;
+  if (cookieHeader) {
+    const match = cookieHeader.match(/amrg_session=([^;]+)/);
+    if (match) {
+      cookieSessionId = match[1];
+    }
+  }
+
+  const rawSessionId = 
+    (req.headers['x-amrg-session'] as string) ||
+    cookieSessionId ||
+    (req.query.session_id as string) ||
+    `sess_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+
+  const cleanSessionId = rawSessionId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
+
+  req.sessionId = cleanSessionId;
+  req.sessionStore = getSessionStore(cleanSessionId);
+
+  res.setHeader('X-AMRG-Session', cleanSessionId);
+  res.setHeader('Set-Cookie', `amrg_session=${cleanSessionId}; Path=/; SameSite=Lax; HttpOnly`);
+
+  next();
 });
 
-// Ensure temp dir exists
-if (!fs.existsSync(path.join(process.cwd(), 'data', 'temp'))) {
-  fs.mkdirSync(path.join(process.cwd(), 'data', 'temp'), { recursive: true });
+// Multer storage in temp directory
+const TEMP_DIR = path.join(process.cwd(), 'data', 'temp');
+if (!fs.existsSync(TEMP_DIR)) {
+  fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
+
+const upload = multer({
+  dest: TEMP_DIR,
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB per file
+});
 
 // ----------------------------------------------------
 // API ROUTES
 // ----------------------------------------------------
+
+// Session Info
+app.get('/api/session', (req: Request, res: Response) => {
+  res.json({
+    sessionId: req.sessionId,
+    clientsCount: req.sessionStore.getClients().length,
+  });
+});
+
+// Reset Session (Clear data)
+app.post('/api/session/reset', (req: Request, res: Response) => {
+  req.sessionStore.clearAllData();
+  res.json({ success: true, message: 'Session data cleared successfully.' });
+});
 
 // Health Check
 app.get('/api/health', (req: Request, res: Response) => {
@@ -50,617 +102,264 @@ app.get('/api/health', (req: Request, res: Response) => {
     app: 'AMRG Review Workbench',
     timestamp: new Date().toISOString(),
     aiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    sessionIsolated: true,
   });
 });
 
-// Users
-app.get('/api/users', (req: Request, res: Response) => {
-  res.json(storage.getUsers());
-});
-
-// Skills & Master Checklist
-app.get('/api/skills', (req: Request, res: Response) => {
-  res.json({
-    skills: [UAE_ONBOARDING_SKILL_META],
-    masterChecklist: MASTER_CHECKLIST,
-  });
-});
-
-// Clients
+// ----------------------------------------------------
+// CLIENTS (ONE CLIENT = ONE ONBOARDING WORKSPACE)
+// ----------------------------------------------------
 app.get('/api/clients', (req: Request, res: Response) => {
-  res.json(storage.getClients());
+  res.json(req.sessionStore.getClients());
 });
 
 app.post('/api/clients', (req: Request, res: Response) => {
-  const { name, entityType, jurisdiction, tradeLicenceNumber, vatTrn, ctTrn, financialYearEnd } = req.body;
-  if (!name) {
-    return res.status(400).json({ error: 'Client name is required' });
+  const { name, entityType, jurisdiction, tradeLicenceNumber, registrationNumber, vatTrn, ctTrn, financialYearEnd } = req.body;
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'Client name is compulsory.' });
   }
 
+  const cleanName = name.trim();
   const newClient: ClientEntity = {
     id: `CLI-${Date.now().toString(36).toUpperCase()}`,
-    name,
-    entityType: entityType || 'FZCO',
-    jurisdiction: jurisdiction || 'DMCC',
-    tradeLicenceNumber,
-    vatTrn,
-    ctTrn,
-    financialYearEnd: financialYearEnd || '31 December',
+    name: cleanName,
+    entityType: entityType?.trim() || 'FZCO',
+    jurisdiction: jurisdiction?.trim() || 'Sharjah SAIF / DMCC',
+    tradeLicenceNumber: tradeLicenceNumber?.trim(),
+    registrationNumber: registrationNumber?.trim(),
+    vatTrn: vatTrn?.trim(),
+    ctTrn: ctTrn?.trim(),
+    financialYearEnd: financialYearEnd?.trim() || '31 December',
+    currentRunStatus: 'Idle',
+    documentsChangedSinceLastRun: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
 
-  storage.saveClient(newClient);
+  req.sessionStore.saveClient(newClient);
   res.status(201).json(newClient);
 });
 
-// Assignments
-app.get('/api/assignments', (req: Request, res: Response) => {
-  res.json(storage.getAssignments());
-});
-
-app.get('/api/assignments/:id', (req: Request, res: Response) => {
-  const assignment = storage.getAssignment(req.params.id);
-  if (!assignment) {
-    return res.status(404).json({ error: 'Assignment not found' });
+app.get('/api/clients/:id', (req: Request, res: Response) => {
+  const client = req.sessionStore.getClient(req.params.id);
+  if (!client) {
+    return res.status(404).json({ error: 'Client not found in this private session.' });
   }
-  const documents = storage.getDocuments(assignment.id);
-  const findings = storage.getFindings(assignment.id);
-  const runs = storage.getRuns(assignment.id);
-  const reports = storage.getReports(assignment.id);
+
+  const documents = req.sessionStore.getDocuments(client.id);
+  const runs = req.sessionStore.getRuns(client.id);
+  const reports = req.sessionStore.getReports(client.id);
 
   res.json({
-    assignment,
+    client,
     documents,
-    findings,
     runs,
     reports,
   });
 });
 
-// Create Assignment (Client name is the ONLY compulsory field)
-app.post('/api/assignments', (req: Request, res: Response) => {
-  const { clientName, jurisdiction, entityType, reviewCutoffDate } = req.body;
-  if (!clientName || !clientName.trim()) {
-    return res.status(400).json({ error: 'Client name is the only compulsory field.' });
+app.patch('/api/clients/:id', (req: Request, res: Response) => {
+  const client = req.sessionStore.getClient(req.params.id);
+  if (!client) {
+    return res.status(404).json({ error: 'Client not found in this private session.' });
   }
 
-  const id = `ASN-${Date.now().toString(36).toUpperCase()}`;
-  const now = new Date().toISOString();
+  const { name, entityType, jurisdiction, tradeLicenceNumber, registrationNumber, vatTrn, ctTrn, financialYearEnd } = req.body;
+  if (name !== undefined) client.name = String(name).trim();
+  if (entityType !== undefined) client.entityType = String(entityType).trim();
+  if (jurisdiction !== undefined) client.jurisdiction = String(jurisdiction).trim();
+  if (tradeLicenceNumber !== undefined) client.tradeLicenceNumber = String(tradeLicenceNumber).trim();
+  if (registrationNumber !== undefined) client.registrationNumber = String(registrationNumber).trim();
+  if (vatTrn !== undefined) client.vatTrn = String(vatTrn).trim();
+  if (ctTrn !== undefined) client.ctTrn = String(ctTrn).trim();
+  if (financialYearEnd !== undefined) client.financialYearEnd = String(financialYearEnd).trim();
 
-  const newAssignment: Assignment = {
-    id,
-    clientName: clientName.trim(),
-    entityDetails: {
-      id: `ENT-${id}`,
-      name: clientName.trim(),
-      entityType: entityType || 'FZCO',
-      jurisdiction: jurisdiction || 'DMCC',
-      financialYearEnd: '31 December',
-      createdAt: now,
-      updatedAt: now,
-    },
-    reportingPeriods: {
-      reviewCutoffDate: reviewCutoffDate || now.split('T')[0],
-      financialYears: ['FY2023', 'FY2024', 'FY2025'],
-      applicableLaws: ['Corporate Tax', 'VAT', 'Free Zone Regulations', 'Commercial Companies Law', 'Labour Laws'],
-    },
-    reviewStatus: 'Intake',
-    currentSkillId: UAE_ONBOARDING_SKILL_META.id,
-    currentSkillVersion: UAE_ONBOARDING_SKILL_META.version,
-    documentsChangedSinceLastRun: false,
-    assignedStaff: {
-      preparerId: 'usr-prep',
-      preparerName: 'Ahmed Tariq',
-      reviewerId: 'usr-rev',
-      reviewerName: 'Sarah Al-Maktoum',
-    },
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  storage.saveAssignment(newAssignment);
-  res.status(201).json(newAssignment);
+  req.sessionStore.saveClient(client);
+  res.json(client);
 });
 
-// Update Assignment Details (confirmation of extracted details)
-app.patch('/api/assignments/:id', (req: Request, res: Response) => {
-  const assignment = storage.getAssignment(req.params.id);
-  if (!assignment) {
-    return res.status(404).json({ error: 'Assignment not found' });
-  }
-
-  const { clientName, entityDetails, reportingPeriods, assignedStaff } = req.body;
-  if (clientName) assignment.clientName = clientName;
-  if (entityDetails) assignment.entityDetails = { ...assignment.entityDetails, ...entityDetails };
-  if (reportingPeriods) assignment.reportingPeriods = { ...assignment.reportingPeriods, ...reportingPeriods };
-  if (assignedStaff) assignment.assignedStaff = { ...assignment.assignedStaff, ...assignedStaff };
-
-  storage.saveAssignment(assignment);
-  res.json(assignment);
-});
-
-// Delete Assignment
-app.delete('/api/assignments/:id', (req: Request, res: Response) => {
-  const success = storage.deleteAssignment(req.params.id);
+app.delete('/api/clients/:id', (req: Request, res: Response) => {
+  const success = req.sessionStore.deleteClient(req.params.id);
   if (!success) {
-    return res.status(404).json({ error: 'Assignment not found' });
+    return res.status(404).json({ error: 'Client not found in this private session.' });
   }
-  res.json({ message: 'Assignment deleted successfully' });
+  res.json({ success: true, message: 'Client workspace deleted.' });
 });
 
 // ----------------------------------------------------
-// DOCUMENT INTAKE & MANAGEMENT
+// DOCUMENTS INTAKE & MANAGEMENT
 // ----------------------------------------------------
-
-// Upload multiple documents / folders / ZIP
-app.post('/api/assignments/:id/documents/upload', upload.array('files'), async (req: Request, res: Response) => {
-  const assignment = storage.getAssignment(req.params.id);
-  if (!assignment) {
-    return res.status(404).json({ error: 'Assignment not found' });
+app.post('/api/clients/:id/documents', upload.array('files', 50), async (req: Request, res: Response) => {
+  const client = req.sessionStore.getClient(req.params.id);
+  if (!client) {
+    return res.status(404).json({ error: 'Client not found in this private session.' });
   }
 
-  const files = (req.files as Express.Multer.File[]) || [];
-  if (files.length === 0) {
-    return res.status(400).json({ error: 'No files provided' });
+  const files = req.files as Express.Multer.File[];
+  if (!files || files.length === 0) {
+    return res.status(400).json({ error: 'No files provided for upload.' });
   }
 
-  const assignmentUploadDir = path.join(UPLOADS_DIR, assignment.id);
-  if (!fs.existsSync(assignmentUploadDir)) {
-    fs.mkdirSync(assignmentUploadDir, { recursive: true });
-  }
-
-  const newDocs: UploadedDocument[] = [];
+  const createdDocs: UploadedDocument[] = [];
 
   for (const file of files) {
-    // Check if uploaded file is a ZIP archive
-    if (file.mimetype === 'application/zip' || file.originalname.toLowerCase().endsWith('.zip')) {
-      try {
-        const zipBuffer = fs.readFileSync(file.path);
-        const zip = await JSZip.loadAsync(zipBuffer);
-        
-        for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-          if (zipEntry.dir) continue;
-          
-          const entryBuffer = await zipEntry.async('nodebuffer');
-          const cleanEntryName = path.basename(relativePath);
-          const ext = path.extname(cleanEntryName).toLowerCase();
-          
-          // Skip system hidden files
-          if (cleanEntryName.startsWith('.') || cleanEntryName.startsWith('__MACOSX')) continue;
+    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    const isZip = originalName.toLowerCase().endsWith('.zip');
 
-          const storedFileName = `${Date.now()}_${cleanEntryName}`;
-          const destPath = path.join(assignmentUploadDir, storedFileName);
-          fs.writeFileSync(destPath, entryBuffer);
+    if (isZip) {
+      // Process ZIP archive contents
+      try {
+        const zipData = fs.readFileSync(file.path);
+        const zip = await JSZip.loadAsync(zipData);
+
+        for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
+          if (zipEntry.dir || relativePath.includes('__MACOSX') || path.basename(relativePath).startsWith('.')) {
+            continue;
+          }
+
+          const entryBuffer = await zipEntry.async('nodebuffer');
+          const entryFileName = path.basename(relativePath);
+          const ext = path.extname(entryFileName);
+          const safeStoredName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`;
+          const finalPath = path.join(req.sessionStore.uploadsDir, safeStoredName);
+
+          fs.writeFileSync(finalPath, entryBuffer);
 
           const hash = crypto.createHash('sha256').update(entryBuffer).digest('hex');
+          const extResult = await extractDocumentWithGemini(finalPath, entryFileName, 'application/octet-stream');
 
-          // Determine mime type
-          let mime = 'application/octet-stream';
-          if (ext === '.pdf') mime = 'application/pdf';
-          else if (ext === '.xlsx' || ext === '.xls') mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-          else if (ext === '.docx' || ext === '.doc') mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-          else if (ext === '.csv') mime = 'text/csv';
-          else if (['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) mime = `image/${ext.replace('.', '')}`;
-          else if (ext === '.txt') mime = 'text/plain';
-
-          const docId = `DOC-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`.toUpperCase();
-
-          newDocs.push({
-            id: docId,
-            assignmentId: assignment.id,
-            originalName: cleanEntryName,
-            storedFileName,
+          createdDocs.push({
+            id: `DOC-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex')}`,
+            clientId: client.id,
+            originalName: entryFileName,
+            storedFileName: safeStoredName,
             fileSize: entryBuffer.length,
-            mimeType: mime,
-            category: 'Other',
-            processingStatus: 'Discovered',
-            isExcluded: false,
-            isDeleted: false,
-            version: 1,
-            contentHash: hash,
+            mimeType: 'application/octet-stream',
+            category: extResult.category,
             uploadedAt: new Date().toISOString(),
-            uploadedBy: 'CurrentUser',
+            contentHash: hash,
+            isExcluded: false,
+            extractionSummary: extResult.summary,
+            limitations: extResult.limitations,
+            extractedEntityName: extResult.extractedEntityName,
           });
         }
-        // Remove temp zip file
-        fs.unlinkSync(file.path);
-      } catch (err) {
-        console.error('Failed to unpack ZIP archive:', err);
+      } catch (zipErr) {
+        console.error('Failed to parse ZIP archive:', zipErr);
+      } finally {
+        if (fs.existsSync(file.path)) {
+          try { fs.unlinkSync(file.path); } catch (e) {}
+        }
       }
     } else {
-      // Normal single or multi-file upload
-      const fileBuffer = fs.readFileSync(file.path);
-      const cleanName = path.basename(file.originalname);
-      const storedFileName = `${Date.now()}_${cleanName}`;
-      const destPath = path.join(assignmentUploadDir, storedFileName);
+      // Standard document upload
+      const ext = path.extname(originalName);
+      const safeStoredName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`;
+      const finalPath = path.join(req.sessionStore.uploadsDir, safeStoredName);
 
-      fs.renameSync(file.path, destPath);
+      fs.copyFileSync(file.path, finalPath);
+      try { fs.unlinkSync(file.path); } catch (e) {}
 
+      const fileBuffer = fs.readFileSync(finalPath);
       const hash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-      const docId = `DOC-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`.toUpperCase();
+      const extResult = await extractDocumentWithGemini(finalPath, originalName, file.mimetype);
 
-      newDocs.push({
-        id: docId,
-        assignmentId: assignment.id,
-        originalName: cleanName,
-        storedFileName,
+      createdDocs.push({
+        id: `DOC-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex')}`,
+        clientId: client.id,
+        originalName,
+        storedFileName: safeStoredName,
         fileSize: file.size,
         mimeType: file.mimetype,
-        category: 'Other',
-        processingStatus: 'Discovered',
-        isExcluded: false,
-        isDeleted: false,
-        version: 1,
-        contentHash: hash,
+        category: extResult.category,
         uploadedAt: new Date().toISOString(),
-        uploadedBy: 'CurrentUser',
-      });
-    }
-  }
-
-  storage.addDocuments(newDocs);
-
-  // Mark assignment documents changed since last review run!
-  assignment.documentsChangedSinceLastRun = true;
-  storage.saveAssignment(assignment);
-
-  // Run background extraction for each uploaded document
-  (async () => {
-    for (const doc of newDocs) {
-      const filePath = path.join(assignmentUploadDir, doc.storedFileName);
-      try {
-        const extraction = await extractDocumentWithGemini(filePath, doc.mimeType, doc.originalName);
-        storage.updateDocument(doc.id, {
-          processingStatus: extraction.isReadable ? 'Extracted' : 'Partially_Extracted',
-          category: extraction.category,
-          documentDate: extraction.documentDate,
-          periodCovered: extraction.periodCovered,
-          extractionSummary: extraction.summary,
-          limitations: extraction.limitations,
-          extractedData: {
-            extractedEntityName: extraction.extractedEntityName,
-            tradeLicenceNumber: extraction.tradeLicenceNumber,
-            vatTrn: extraction.vatTrn,
-            ctTrn: extraction.ctTrn,
-            financialYearEnd: extraction.financialYearEnd,
-            turnoverAmount: extraction.turnoverAmount,
-            profitAmount: extraction.profitAmount,
-            vatOutputTax: extraction.vatOutputTax,
-            vatInputTax: extraction.vatInputTax,
-          },
-        });
-
-        // Automatically update assignment entity details if extracted and currently missing
-        if (extraction.tradeLicenceNumber && !assignment.entityDetails.tradeLicenceNumber) {
-          assignment.entityDetails.tradeLicenceNumber = extraction.tradeLicenceNumber;
-        }
-        if (extraction.vatTrn && !assignment.entityDetails.vatTrn) {
-          assignment.entityDetails.vatTrn = extraction.vatTrn;
-        }
-        if (extraction.ctTrn && !assignment.entityDetails.ctTrn) {
-          assignment.entityDetails.ctTrn = extraction.ctTrn;
-        }
-        if (extraction.financialYearEnd && !assignment.entityDetails.financialYearEnd) {
-          assignment.entityDetails.financialYearEnd = extraction.financialYearEnd;
-        }
-        storage.saveAssignment(assignment);
-      } catch (err) {
-        // Fallback without logging full error stack
-        storage.updateDocument(doc.id, {
-          processingStatus: 'Extracted',
-          category: 'Other',
-          limitations: 'Local parsing applied',
-        });
-      }
-    }
-  })();
-
-  res.status(201).json({
-    message: `Successfully uploaded ${newDocs.length} files. Automated extraction initiated.`,
-    documents: newDocs,
-  });
-});
-
-// Rescan & synchronize documents from disk
-app.post('/api/assignments/:id/documents/rescan', async (req: Request, res: Response) => {
-  const assignment = storage.getAssignment(req.params.id);
-  if (!assignment) {
-    return res.status(404).json({ error: 'Assignment not found' });
-  }
-
-  const assignmentUploadDir = path.join(UPLOADS_DIR, assignment.id);
-  if (!fs.existsSync(assignmentUploadDir)) {
-    return res.json({ message: 'No uploads directory found', documents: [] });
-  }
-
-  const fileNames = fs.readdirSync(assignmentUploadDir);
-  const existingDocs = storage.getAllDocumentsIncludingDeleted(assignment.id);
-  const addedDocs: UploadedDocument[] = [];
-
-  for (const storedFileName of fileNames) {
-    if (storedFileName.startsWith('.')) continue;
-
-    const alreadyRegistered = existingDocs.find(d => d.storedFileName === storedFileName);
-    const filePath = path.join(assignmentUploadDir, storedFileName);
-    const stat = fs.statSync(filePath);
-    if (stat.isDirectory()) continue;
-
-    // Remove timestamp prefix if present for originalName
-    const originalName = storedFileName.replace(/^\d+_/, '');
-    const ext = path.extname(originalName).toLowerCase();
-
-    let mime = 'application/octet-stream';
-    if (ext === '.pdf') mime = 'application/pdf';
-    else if (ext === '.xlsx' || ext === '.xls') mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    else if (ext === '.docx' || ext === '.doc') mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-    else if (ext === '.csv') mime = 'text/csv';
-    else if (['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) mime = `image/${ext.replace('.', '')}`;
-    else if (ext === '.txt') mime = 'text/plain';
-
-    const extraction = await extractDocumentWithGemini(filePath, mime, originalName);
-
-    if (alreadyRegistered) {
-      storage.updateDocument(alreadyRegistered.id, {
-        processingStatus: 'Extracted',
-        category: extraction.category,
-        periodCovered: extraction.periodCovered,
-        extractionSummary: extraction.summary,
-        limitations: extraction.limitations,
-        extractedData: {
-          extractedEntityName: extraction.extractedEntityName,
-          tradeLicenceNumber: extraction.tradeLicenceNumber,
-          vatTrn: extraction.vatTrn,
-          ctTrn: extraction.ctTrn,
-          financialYearEnd: extraction.financialYearEnd,
-        },
-      });
-    } else {
-      const fileBuffer = fs.readFileSync(filePath);
-      const hash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-      const docId = `DOC-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`.toUpperCase();
-
-      const newDoc: UploadedDocument = {
-        id: docId,
-        assignmentId: assignment.id,
-        originalName,
-        storedFileName,
-        fileSize: stat.size,
-        mimeType: mime,
-        category: extraction.category,
-        processingStatus: 'Extracted',
-        isExcluded: false,
-        isDeleted: false,
-        version: 1,
         contentHash: hash,
-        periodCovered: extraction.periodCovered,
-        extractionSummary: extraction.summary,
-        limitations: extraction.limitations,
-        extractedData: {
-          extractedEntityName: extraction.extractedEntityName,
-          tradeLicenceNumber: extraction.tradeLicenceNumber,
-          vatTrn: extraction.vatTrn,
-          ctTrn: extraction.ctTrn,
-          financialYearEnd: extraction.financialYearEnd,
-        },
-        uploadedAt: new Date(stat.birthtime || stat.mtime).toISOString(),
-        uploadedBy: 'CurrentUser',
-      };
-
-      addedDocs.push(newDoc);
-    }
-
-    if (extraction.tradeLicenceNumber && !assignment.entityDetails.tradeLicenceNumber) {
-      assignment.entityDetails.tradeLicenceNumber = extraction.tradeLicenceNumber;
+        isExcluded: false,
+        extractionSummary: extResult.summary,
+        limitations: extResult.limitations,
+        extractedEntityName: extResult.extractedEntityName,
+      });
     }
   }
 
-  if (addedDocs.length > 0) {
-    storage.addDocuments(addedDocs);
-    assignment.documentsChangedSinceLastRun = true;
-    storage.saveAssignment(assignment);
-  }
+  req.sessionStore.addDocuments(createdDocs);
 
-  res.json({
-    message: `Rescan complete. Synchronized ${fileNames.length} documents.`,
-    documents: storage.getDocuments(assignment.id),
-  });
+  // Evidence has been modified — rerun is enabled
+  client.documentsChangedSinceLastRun = true;
+  req.sessionStore.saveClient(client);
+
+  res.status(201).json(createdDocs);
 });
 
-// Toggle document exclusion
-app.patch('/api/assignments/:id/documents/:docId/exclude', (req: Request, res: Response) => {
-  const { isExcluded } = req.body;
-  const doc = storage.updateDocument(req.params.docId, { isExcluded: Boolean(isExcluded) });
-  if (!doc) {
-    return res.status(404).json({ error: 'Document not found' });
+app.delete('/api/clients/:id/documents/:docId', (req: Request, res: Response) => {
+  const client = req.sessionStore.getClient(req.params.id);
+  if (!client) {
+    return res.status(404).json({ error: 'Client not found.' });
   }
 
-  // Document status changed -> rerun required
-  const assignment = storage.getAssignment(req.params.id);
-  if (assignment) {
-    assignment.documentsChangedSinceLastRun = true;
-    storage.saveAssignment(assignment);
+  const success = req.sessionStore.deleteDocument(req.params.docId);
+  if (!success) {
+    return res.status(404).json({ error: 'Document not found.' });
   }
+
+  // Evidence has been modified — rerun is enabled
+  client.documentsChangedSinceLastRun = true;
+  req.sessionStore.saveClient(client);
+
+  res.json({ success: true, message: 'Document removed from workspace.' });
+});
+
+app.post('/api/clients/:id/documents/:docId/exclude', (req: Request, res: Response) => {
+  const client = req.sessionStore.getClient(req.params.id);
+  if (!client) {
+    return res.status(404).json({ error: 'Client not found.' });
+  }
+
+  const doc = req.sessionStore.getDocument(req.params.docId);
+  if (!doc) {
+    return res.status(404).json({ error: 'Document not found.' });
+  }
+
+  doc.isExcluded = !doc.isExcluded;
+  req.sessionStore.updateDocument(doc.id, { isExcluded: doc.isExcluded });
+
+  // Exclusion changed evidence snapshot — rerun is enabled
+  client.documentsChangedSinceLastRun = true;
+  req.sessionStore.saveClient(client);
 
   res.json(doc);
 });
 
-// Permanent document deletion (Requires confirmation)
-app.delete('/api/assignments/:id/documents/:docId', (req: Request, res: Response) => {
-  const { confirm } = req.body;
-  if (!confirm) {
-    return res.status(400).json({ error: 'Explicit confirmation required for permanent deletion.' });
-  }
-
-  const doc = storage.getDocument(req.params.docId);
-  if (!doc) {
-    return res.status(404).json({ error: 'Document not found' });
-  }
-
-  // Mark as deleted in storage (to retain audit history that source document is no longer available)
-  storage.updateDocument(doc.id, { isDeleted: true, processingStatus: 'Deleted' });
-
-  // Delete physical file from disk if present
-  const filePath = path.join(UPLOADS_DIR, doc.assignmentId, doc.storedFileName);
-  if (fs.existsSync(filePath)) {
-    try {
-      fs.unlinkSync(filePath);
-    } catch (err) {
-      console.warn('Could not remove physical file from disk:', err);
-    }
-  }
-
-  // Document collection changed -> rerun required
-  const assignment = storage.getAssignment(req.params.id);
-  if (assignment) {
-    assignment.documentsChangedSinceLastRun = true;
-    storage.saveAssignment(assignment);
-  }
-
-  res.json({ message: 'Document permanently deleted. Findings marked as requiring rerun.' });
-});
-
 // ----------------------------------------------------
-// REVIEW EXECUTION & APPROVAL
+// RUN ONBOARDING REVIEW & DELIVERABLE GENERATION
 // ----------------------------------------------------
-
-// Run / Re-run Review
-app.post('/api/assignments/:id/review/run', async (req: Request, res: Response) => {
-  try {
-    const result = await executeReviewRun(req.params.id);
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Review execution failed' });
-  }
-});
-
-// Reviewer approval / correction of finding
-app.patch('/api/assignments/:id/findings/:findingId', (req: Request, res: Response) => {
-  const { reviewerDecision, reviewerNotes, reviewerName, isResolved, priority, issueSummary, recommendedAction } = req.body;
-  
-  const finding = storage.updateFinding(req.params.findingId, {
-    reviewerDecision,
-    reviewerNotes,
-    reviewerName: reviewerName || 'Reviewer',
-    reviewedAt: new Date().toISOString(),
-    isResolved: Boolean(isResolved),
-    ...(priority && { priority }),
-    ...(issueSummary && { issueSummary }),
-    ...(recommendedAction && { recommendedAction }),
-  });
-
-  if (!finding) {
-    return res.status(404).json({ error: 'Finding not found' });
-  }
-
-  res.json(finding);
-});
-
-// Approve all findings in current run
-app.post('/api/assignments/:id/findings/approve-all', (req: Request, res: Response) => {
-  const { reviewerName } = req.body;
-  const assignment = storage.getAssignment(req.params.id);
-  if (!assignment) {
-    return res.status(404).json({ error: 'Assignment not found' });
-  }
-
-  const updated = storage.approveAllFindings(assignment.id, assignment.activeRunId, reviewerName || 'AMRG Lead Reviewer');
-  res.json({ message: `Approved ${updated.length} findings.`, count: updated.length });
-});
-
-// ----------------------------------------------------
-// EXCEL REPORT GENERATION
-// ----------------------------------------------------
-
-// Generate Excel Report (Draft or Final)
-app.post('/api/assignments/:id/reports/generate', async (req: Request, res: Response) => {
-  const { type, reviewerName } = req.body;
-  const reportType: 'Draft' | 'Final' = type === 'Final' ? 'Final' : 'Draft';
-
-  const assignment = storage.getAssignment(req.params.id);
-  if (!assignment) {
-    return res.status(404).json({ error: 'Assignment not found' });
-  }
-
-  const runs = storage.getRuns(assignment.id);
-  if (runs.length === 0) {
-    return res.status(400).json({ error: 'No review runs completed yet. Please run review first.' });
-  }
-
-  const latestRun = runs[0];
-  const findings = storage.getFindings(assignment.id, latestRun.id);
-  const documents = storage.getDocuments(assignment.id);
-
-  // If Final report requested, verify that documents have not changed and reviewer approval is complete!
-  if (reportType === 'Final') {
-    if (assignment.documentsChangedSinceLastRun) {
-      return res.status(400).json({ 
-        error: 'Documents have changed since the last review run. A new review run and fresh reviewer approval are required before generating a Final report.' 
-      });
-    }
-
-    const pendingFindings = findings.filter(f => f.reviewerDecision === 'Pending');
-    if (pendingFindings.length > 0) {
-      return res.status(400).json({ 
-        error: `Reviewer approval is required before generating a Final report. ${pendingFindings.length} findings remain pending review.` 
-      });
-    }
+app.post('/api/clients/:id/run', async (req: Request, res: Response) => {
+  const client = req.sessionStore.getClient(req.params.id);
+  if (!client) {
+    return res.status(404).json({ error: 'Client not found.' });
   }
 
   try {
-    const approvalTimestamp = reportType === 'Final' ? new Date().toISOString() : undefined;
-    const { fileName, filePath } = await generateAmrgExcelWorkbook(
-      assignment,
-      latestRun,
-      findings,
-      documents,
-      reportType,
-      reviewerName || assignment.assignedStaff.reviewerName || 'Partner',
-      approvalTimestamp
-    );
-
-    const stats = fs.statSync(filePath);
-    const existingReports = storage.getReports(assignment.id);
-
-    const report: GeneratedReport = {
-      id: `RPT-${Date.now().toString(36).toUpperCase()}`,
-      assignmentId: assignment.id,
-      runId: latestRun.id,
-      reportNumber: existingReports.length + 1,
-      version: `${reportType} v${existingReports.length + 1}.0`,
-      type: reportType,
-      generatedAt: new Date().toISOString(),
-      generatedBy: reviewerName || 'Staff',
-      reviewerApprovedBy: reportType === 'Final' ? (reviewerName || 'Partner') : undefined,
-      reviewerApprovedAt: approvalTimestamp,
-      fileName,
-      filePath,
-      fileSizeBytes: stats.size,
-      includedDocumentsCount: documents.length,
-      findingsCount: findings.length,
-    };
-
-    storage.saveReport(report);
-
-    if (reportType === 'Final') {
-      assignment.reviewStatus = 'Approved_Final';
-      assignment.latestApprovedReportId = report.id;
-      storage.saveAssignment(assignment);
-    }
-
-    res.status(201).json(report);
+    const result = await executeReviewRun(client.id, req.sessionStore);
+    res.status(200).json(result);
   } catch (err) {
-    console.error('Failed to generate Excel report:', err);
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Excel report generation failed' });
+    console.error('Review run failed:', err);
+    res.status(500).json({ 
+      error: err instanceof Error ? err.message : 'Review run failed to execute.' 
+    });
   }
 });
 
-// Download Generated Excel File
-app.get('/api/assignments/:id/reports/:reportId/download', (req: Request, res: Response) => {
-  const reports = storage.getReports(req.params.id);
-  const report = reports.find(r => r.id === req.params.reportId);
-  if (!report || !fs.existsSync(report.filePath)) {
-    return res.status(404).json({ error: 'Report file not located on server.' });
+// Download Generated Excel Deliverable (.xlsx)
+app.get('/api/clients/:id/reports/:reportId/download', (req: Request, res: Response) => {
+  const client = req.sessionStore.getClient(req.params.id);
+  if (!client) {
+    return res.status(404).json({ error: 'Client not found in this private session.' });
+  }
+
+  const report = req.sessionStore.getReport(req.params.reportId);
+  if (!report || report.clientId !== client.id || !fs.existsSync(report.filePath)) {
+    return res.status(404).json({ error: 'Report deliverable file not located on server.' });
   }
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -669,13 +368,55 @@ app.get('/api/assignments/:id/reports/:reportId/download', (req: Request, res: R
   fileStream.pipe(res);
 });
 
+// Centralized Reports endpoint
+app.get('/api/reports', (req: Request, res: Response) => {
+  res.json(req.sessionStore.getReports());
+});
+
+// ----------------------------------------------------
+// SETTINGS DELIVERABLES: BLANK TEMPLATE & WORD SKILL
+// ----------------------------------------------------
+
+// Download Blank Canonical Excel Template (.xlsx)
+app.get('/api/template/download', async (req: Request, res: Response) => {
+  try {
+    const buffer = await generateBlankExcelTemplate();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="AMRG_UAE_Onboarding_Template_Blank.xlsx"');
+    res.send(buffer);
+  } catch (err) {
+    console.error('Failed to generate blank template:', err);
+    res.status(500).json({ error: 'Failed to generate blank Excel template.' });
+  }
+});
+
+// Download Full Published Skill Methodology as Word Document (.docx)
+app.get('/api/skill/download-word', async (req: Request, res: Response) => {
+  try {
+    const buffer = await generateSkillDocx();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', 'attachment; filename="AMRG_UAE_Onboarding_Review_Skill_v2.4.docx"');
+    res.send(buffer);
+  } catch (err) {
+    console.error('Failed to generate Word skill document:', err);
+    res.status(500).json({ error: 'Failed to generate Word skill document.' });
+  }
+});
+
 // ----------------------------------------------------
 // VITE DEV SERVER / STATIC ASSETS
 // ----------------------------------------------------
 async function startServer() {
+  const httpServer = http.createServer(app);
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { 
+        middlewareMode: true,
+        hmr: {
+          server: httpServer,
+        },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -687,7 +428,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, () => {
+  httpServer.listen(PORT, () => {
     console.log(`AMRG Review Workbench server running at http://localhost:${PORT}`);
   });
 }

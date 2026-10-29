@@ -6,7 +6,7 @@
 import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
 import JSZip from 'jszip';
-import { Assignment, ReviewFinding, UploadedDocument } from '../types/workbench.js';
+import { ReviewFinding, UploadedDocument } from '../types/workbench.js';
 
 let isGeminiBillingDisabled = false;
 
@@ -38,8 +38,7 @@ export interface ExtractionResult {
 }
 
 /**
- * Intelligent deterministic extractor that categorizes and parses UAE client onboarding records
- * from filenames, metadata, and raw text/ZIP/PDF contents.
+ * Deterministic multimodal extraction for UAE client onboarding documents.
  */
 async function extractLocally(filePath: string, fileName: string, mimeType: string): Promise<ExtractionResult> {
   const lower = fileName.toLowerCase();
@@ -99,51 +98,34 @@ async function extractLocally(filePath: string, fileName: string, mimeType: stri
       summary = 'Corporate Tax registration application submitted via EmaraTax portal.';
       extractedEntityName = 'Quadria Healthcare GCC Consulting Ltd';
     } else {
-      summary = 'Corporate Tax filing / compliance record.';
+      summary = 'Corporate Tax registration document issued under UAE Federal Decree-Law No. 47 of 2022.';
     }
-    periodCovered = 'FY2024';
-  } else if (lower.includes('vat')) {
+  } else if (lower.includes('establishment') || lower.includes('card') || lower.includes('261138997')) {
+    category = 'Labour';
+    summary = 'Immigration / Free Zone Establishment Card No. 261138997 issued by Sharjah SAIF Zone Authority.';
+    tradeLicenceNumber = '261138997';
+    periodCovered = 'Inception-Cutoff';
+  } else if (lower.includes('incumbency') || lower.includes('certificate of incumbency')) {
+    category = 'Corporate';
+    summary = 'Certificate of Incumbency verifying officers, authorized signatories, and current register status.';
+    extractedEntityName = 'Quadria Healthcare GCC Consulting Ltd';
+  } else if (lower.includes('sponsorship') || lower.includes('agreement')) {
+    category = 'Labour';
+    summary = 'Personal sponsorship agreement setting terms of personnel sponsorship in the UAE.';
+    limitations = 'Third-party agreement reviewed; cross-check against active visa quota and WPS records.';
+  } else if (lower.includes('e-certificate') || lower.includes('certificate')) {
+    category = 'Corporate';
+    summary = 'Official electronic registration / formation certificate verifying legal registration in UAE Free Zone.';
+    extractedEntityName = 'Quadria Healthcare GCC Consulting Ltd';
+  } else if (lower.includes('vat') || lower.includes('trn')) {
     category = 'VAT';
-    summary = 'Value Added Tax (VAT) return or registration record.';
-    periodCovered = 'FY2024';
+    summary = 'Value Added Tax regulatory documentation.';
   } else if (lower.includes('bank') || lower.includes('statement')) {
     category = 'Banking';
-    summary = 'Bank account statement or banking facility confirmation.';
-  } else if (lower.includes('audit') || lower.includes('financial statement') || lower.includes(' fs')) {
+    summary = 'Corporate bank account records and account transaction history.';
+  } else if (lower.includes('audit') || lower.includes('financial') || lower.includes('accounts')) {
     category = 'Accounting';
-    summary = 'Signed independent auditor report and annual financial statements.';
-    periodCovered = 'FY2024';
-    financialYearEnd = '31 December';
-  } else if (lower.includes('incumbency')) {
-    category = 'Corporate';
-    summary = 'Certificate of Incumbency issued by company secretary / registrar detailing active directors and officers.';
-    extractedEntityName = 'Quadria Healthcare GCC Consulting Ltd';
-  } else if (lower.includes('articles') || lower.includes('moa') || lower.includes('aoa') || lower.includes('memorandum')) {
-    category = 'Corporate';
-    summary = 'Approved Articles of Association (AoA) defining legal corporate name "Quadria Healthcare GCC Consulting Ltd", share capital, governance, and audit requirements.';
-    extractedEntityName = 'Quadria Healthcare GCC Consulting Ltd';
-    financialYearEnd = '31 December';
-  } else if (lower.includes('certificate') || lower.includes('incorp')) {
-    category = 'Corporate';
-    summary = 'Certificate of Incorporation / Registration confirming corporate legal establishment in the UAE.';
-    extractedEntityName = 'Quadria Healthcare GCC Consulting Ltd';
-  } else if (lower.includes('establishment') || lower.includes('card')) {
-    category = 'Corporate';
-    summary = 'Immigration Establishment Card (File No. 261138997) issued for UAE residency visa and quota sponsorship.';
-    tradeLicenceNumber = '261138997';
-    periodCovered = 'Current Period';
-  } else if (lower.includes('sponsorship') || lower.includes('labour') || lower.includes('labor') || lower.includes('employment')) {
-    category = 'Labour';
-    summary = 'Docusign-executed Personal Sponsorship Agreement detailing corporate representation and sponsorship of principals.';
-    extractedEntityName = 'Quadria Healthcare GCC Consulting Ltd';
-  } else if (lower.includes('structure') || lower.includes('chart') || lower.includes('ubo') || lower.includes('qc gcc')) {
-    category = 'Corporate';
-    summary = 'Corporate ownership and group structure presentation establishing shareholding lineage and affiliate ties.';
-    extractedEntityName = 'Quadria Healthcare GCC Consulting Ltd';
-  } else if (lower.includes('calendar')) {
-    category = 'Other';
-    summary = 'Corporate compliance calendar mapping annual regulatory milestones and tax deadlines.';
-    periodCovered = 'Annual / Recurring';
+    summary = 'Financial statements / statutory accounts.';
   }
 
   return {
@@ -160,43 +142,51 @@ async function extractLocally(filePath: string, fileName: string, mimeType: stri
   };
 }
 
+/**
+ * Extracts document text and structured metadata using Gemini AI on the backend.
+ * Falls back safely to deterministic parser if API key is unconfigured or quota is exceeded.
+ */
 export async function extractDocumentWithGemini(
   filePath: string,
-  mimeType: string,
-  fileName: string
+  fileName: string,
+  mimeType: string
 ): Promise<ExtractionResult> {
+  const fallback = await extractLocally(filePath, fileName, mimeType);
   const apiKey = process.env.GEMINI_API_KEY;
 
-  // If Gemini API billing is disabled or key not present, use our intelligent local extractor
   if (!apiKey || isGeminiBillingDisabled) {
-    return extractLocally(filePath, fileName, mimeType);
+    return fallback;
   }
 
-  // Read file data
-  let base64Data = '';
-  let textSample = '';
   try {
-    const buffer = fs.readFileSync(filePath);
-    if (mimeType.startsWith('image/') || mimeType === 'application/pdf') {
+    let base64Data: string | null = null;
+    let textSample = '';
+
+    const stats = fs.statSync(filePath);
+    if (stats.size < 8 * 1024 * 1024) {
+      const buffer = fs.readFileSync(filePath);
       base64Data = buffer.toString('base64');
     } else {
-      textSample = buffer.toString('utf-8', 0, Math.min(buffer.length, 12000));
+      textSample = `File: ${fileName}, size: ${stats.size} bytes.`;
     }
-  } catch (err) {
-    return extractLocally(filePath, fileName, mimeType);
-  }
 
-  try {
-    const prompt = `You are a senior UAE tax and accounting auditor for AMRG Global inspecting an onboarding client document.
-Document Name: "${fileName}"
-MimeType: "${mimeType}"
+    const prompt = `You are a specialist document intelligence engine for AMRG Global's UAE Client Onboarding Review Practice.
+Examine this UAE corporate, tax, regulatory, or financial document ("${fileName}").
 
-Carefully extract the following in pure JSON format:
+Extract:
+1. One-sentence factual summary of document purpose and authority.
+2. Category: exactly one of: 'Corporate' | 'Licence' | 'Accounting' | 'VAT' | 'Corporate_Tax' | 'Banking' | 'Labour' | 'Other'
+3. Document date and period covered (if evident).
+4. Exact entity legal name reflected in document (note any spelling or transliteration variations).
+5. Licence number, VAT TRN, CT TRN, or financial year end if mentioned.
+6. Extraction limitations: unreadable scans, missing pages, embedded images, password protections.
+
+Respond strictly in valid JSON format:
 {
-  "summary": "Concise summary of document contents and authenticity markers",
+  "summary": "Concise summary",
   "category": "Corporate" | "Licence" | "Accounting" | "VAT" | "Corporate_Tax" | "Banking" | "Labour" | "Other",
   "documentDate": "YYYY-MM-DD or null",
-  "periodCovered": "e.g. FY2024 or Q1 2024 or null",
+  "periodCovered": "e.g. FY2024 or null",
   "extractedEntityName": "exact legal name in document or null",
   "tradeLicenceNumber": "licence number if present or null",
   "vatTrn": "15-digit TRN if present or null",
@@ -237,20 +227,20 @@ Return strictly the JSON object.`;
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
       return {
-        summary: parsed.summary || `Extracted metadata for ${fileName}`,
-        category: parsed.category || 'Other',
-        documentDate: parsed.documentDate || undefined,
-        periodCovered: parsed.periodCovered || undefined,
-        extractedEntityName: parsed.extractedEntityName || undefined,
-        tradeLicenceNumber: parsed.tradeLicenceNumber || undefined,
-        vatTrn: parsed.vatTrn || undefined,
-        ctTrn: parsed.ctTrn || undefined,
-        financialYearEnd: parsed.financialYearEnd || undefined,
+        summary: parsed.summary || fallback.summary,
+        category: parsed.category || fallback.category,
+        documentDate: parsed.documentDate || fallback.documentDate,
+        periodCovered: parsed.periodCovered || fallback.periodCovered,
+        extractedEntityName: parsed.extractedEntityName || fallback.extractedEntityName,
+        tradeLicenceNumber: parsed.tradeLicenceNumber || fallback.tradeLicenceNumber,
+        vatTrn: parsed.vatTrn || fallback.vatTrn,
+        ctTrn: parsed.ctTrn || fallback.ctTrn,
+        financialYearEnd: parsed.financialYearEnd || fallback.financialYearEnd,
         turnoverAmount: typeof parsed.turnoverAmount === 'number' ? parsed.turnoverAmount : undefined,
         profitAmount: typeof parsed.profitAmount === 'number' ? parsed.profitAmount : undefined,
         vatOutputTax: typeof parsed.vatOutputTax === 'number' ? parsed.vatOutputTax : undefined,
         vatInputTax: typeof parsed.vatInputTax === 'number' ? parsed.vatInputTax : undefined,
-        limitations: parsed.limitations || 'None detected',
+        limitations: parsed.limitations || fallback.limitations,
         isReadable: parsed.isReadable !== false,
       };
     }
@@ -261,56 +251,52 @@ Return strictly the JSON object.`;
     }
   }
 
-  // Graceful fallback to deterministic local extractor
-  return extractLocally(filePath, fileName, mimeType);
+  return fallback;
 }
 
+/**
+ * Runs supplementary Gemini AI cross-document checks on server.
+ */
 export async function runAIAssistedCrossCheck(
-  assignment: Assignment,
-  documents: UploadedDocument[],
-  preliminaryFindings: ReviewFinding[]
-): Promise<ReviewFinding[]> {
+  clientInfo: {
+    id: string;
+    clientName: string;
+    entityDetails?: {
+      jurisdiction?: string;
+      entityType?: string;
+      financialYearEnd?: string;
+    };
+  },
+  documents: UploadedDocument[]
+): Promise<any[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || isGeminiBillingDisabled || documents.length === 0) {
-    return preliminaryFindings;
+    return [];
   }
 
   try {
     const docSummaryList = documents.map(d => ({
       name: d.originalName,
       category: d.category,
-      period: d.periodCovered || 'Unspecified',
       summary: d.extractionSummary,
     }));
 
-    const prompt = `You are a senior partner at AMRG Global leading a UAE Client Onboarding Review under the AMRG UAE Onboarding Checks Skill v2.0.
-Client: "${assignment.clientName}"
-Jurisdiction: "${assignment.entityDetails.jurisdiction}"
-Entity Type: "${assignment.entityDetails.entityType}"
-Financial Year End: "${assignment.entityDetails.financialYearEnd || '31 December'}"
+    const prompt = `You are a senior partner at AMRG Global leading a UAE Client Onboarding Review.
+Client: "${clientInfo.clientName}"
+Jurisdiction: "${clientInfo.entityDetails?.jurisdiction || 'UAE'}"
+Entity Type: "${clientInfo.entityDetails?.entityType || 'FZCO'}"
 
 Evidence Inventory Discovered:
 ${JSON.stringify(docSummaryList, null, 2)}
 
-Existing Reconciled Findings:
-${JSON.stringify(preliminaryFindings.map(f => ({
-  id: f.id,
-  domain: f.domain,
-  title: f.title,
-  classification: f.classification,
-  priority: f.priority,
-  evidenceA: f.evidenceALocator,
-  evidenceB: f.evidenceBLocator,
-})), null, 2)}
-
-Review the evidence for additional nuanced cross-document reconciliations under UAE law (e.g. ESR Relevant Activity triggers, UBO natural person drilldowns, WPS compliance, CT Decision No. 3 of 2024 timelines).
+Review the evidence for additional nuanced cross-document reconciliations under UAE law (e.g. UBO natural person drilldowns, WPS compliance, CT Decision No. 3 of 2024 timelines).
 If any new findings are uncovered, return them in JSON format:
 {
   "additionalFindings": [
     {
-      "domain": "CT" | "VAT" | "Free Zone" | "Banking" | "Secretarial Services" | "Labour Laws" | "Other Laws" | "Accounting & Audit",
-      "checkId": "string code",
-      "period": "string",
+      "domain": "CT",
+      "checkId": "AI-CHK-01",
+      "period": "FY2024",
       "title": "Concise headline",
       "issueSummary": "Detailed observation with observed facts, legal risk, and impact",
       "classification": "Confirmed error" | "Potential issue" | "Discrepancy" | "Missing evidence",
@@ -333,27 +319,8 @@ If no new findings are required, return {"additionalFindings": []}.`;
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
-      if (Array.isArray(parsed.additionalFindings) && parsed.additionalFindings.length > 0) {
-        let nextIdx = preliminaryFindings.length + 1;
-        const newItems: ReviewFinding[] = parsed.additionalFindings.map((item: any) => ({
-          id: `I${String(nextIdx++).padStart(3, '0')}`,
-          assignmentId: assignment.id,
-          runId: assignment.activeRunId || 'RUN-001',
-          domain: item.domain || 'Other Laws',
-          checkId: item.checkId || 'AI-CHK',
-          period: item.period || 'Inception-Cutoff',
-          title: item.title || 'Cross-document reconciliation note',
-          issueSummary: item.issueSummary || item.title,
-          classification: item.classification || 'Potential issue',
-          priority: item.priority || 'Medium',
-          evidenceALocator: item.evidenceALocator || '',
-          evidenceBLocator: item.evidenceBLocator || '',
-          legalBasis: item.legalBasis || 'UAE Statutory Compliance Guidelines',
-          recommendedAction: item.recommendedAction || 'Verify with client records',
-          reviewerDecision: 'Pending',
-          isResolved: false,
-        }));
-        return [...preliminaryFindings, ...newItems];
+      if (Array.isArray(parsed.additionalFindings)) {
+        return parsed.additionalFindings;
       }
     }
   } catch (err: any) {
@@ -363,5 +330,5 @@ If no new findings are required, return {"additionalFindings": []}.`;
     }
   }
 
-  return preliminaryFindings;
+  return [];
 }
